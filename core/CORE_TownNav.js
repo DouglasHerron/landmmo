@@ -3,10 +3,8 @@
  * Reliable town / bank / vendor pathing for Adventure Land.
  * Attaches to: BOT.townNav
  *
- * Key AL gotchas this handles:
- * - Open merchant stand blocks movement → close first
- * - smart_move("bank") often stops outside the door → walk to door + transport
- * - Prefer NPC coords / named destinations over vague { to: "main" }
+ * Never spam smart_move — re-issuing while searching causes
+ * "searching for a path" / "path found" loops.
  */
 (function () {
     "use strict";
@@ -17,7 +15,8 @@
     let lastX = 0;
     let lastY = 0;
     let lastDestKey = "";
-    const MOVE_RETRY_MS = 10000;
+    const RETRY_WHILE_IDLE_MS = 12000;
+    const STUCK_REPATH_MS = 25000;
 
     function utils() {
         return BOT.utils || {};
@@ -37,23 +36,37 @@
     function isPathing() {
         try {
             if (typeof is_moving === "function" && is_moving(character)) return true;
-            if (typeof smart !== "undefined" && smart && smart.moving) return true;
-        } catch (e) { /* ignore */ }
+        } catch (e0) { /* ignore */ }
+        try {
+            if (typeof smart !== "undefined" && smart) {
+                if (smart.moving) return true;
+                // AL sets these while A* is running — do not interrupt
+                if (smart.searching) return true;
+                if (smart.start_x != null && smart.moving !== false && smart.found === false) return true;
+            }
+        } catch (e1) { /* ignore */ }
         return false;
     }
 
-    function movedSinceLast() {
-        const d = dist(character, { x: lastX, y: lastY });
-        return d >= 20;
+    function positionDelta() {
+        return dist(character, { x: lastX, y: lastY });
     }
 
-    /** Merchant stand open = cannot walk. */
+    function destKey(dest) {
+        if (typeof dest === "string") return dest;
+        if (dest && dest.key) return String(dest.key);
+        if (dest && dest.name) return "name:" + dest.name;
+        if (dest && typeof dest.x === "number") {
+            return (dest.map || character.map || "") + ":" + Math.round(dest.x) + "," + Math.round(dest.y);
+        }
+        return "unknown";
+    }
+
     function ensureCanMove() {
         try {
             if (character.stand || character.standed) {
                 if (typeof parent !== "undefined" && parent && typeof parent.close_merchant === "function") {
                     parent.close_merchant();
-                    if (utils().log) utils().log("Closed merchant stand");
                 }
             }
         } catch (e) { /* ignore */ }
@@ -74,7 +87,8 @@
                         h: d[3] || 40,
                         destMap: d[4],
                         destSpawn: d[5] || 0,
-                        map: fromMap
+                        map: fromMap,
+                        key: "door:" + fromMap + "→" + destMap
                     };
                 }
             }
@@ -94,21 +108,34 @@
     }
 
     /**
-     * Issue a path request (throttled). dest may be string, {x,y,map}, or entity.
+     * Issue smart_move at most once per destination until idle or truly stuck.
      */
     function pathTo(dest, force) {
         ensureCanMove();
+        if (!dest && dest !== 0) return;
 
         const t = now();
-        const key = typeof dest === "string" ? dest
-            : (dest && dest.name) ? dest.name
-            : (dest && dest.map ? dest.map + ":" : "") + (dest && dest.x) + "," + (dest && dest.y);
+        const key = destKey(dest);
+        const pathing = isPathing();
+        const elapsed = t - lastMoveAt;
+        const moved = positionDelta();
 
-        if (!force) {
-            if (isPathing() && movedSinceLast() && key === lastDestKey && t - lastMoveAt < MOVE_RETRY_MS) {
+        // Already walking/searching toward same (or any) dest — do not restart
+        if (pathing && !force) {
+            if (elapsed < STUCK_REPATH_MS) return;
+            // Long pathing with real movement = still fine
+            if (moved >= 30) {
+                lastX = character.x;
+                lastY = character.y;
+                lastMoveAt = t;
                 return;
             }
-            if (!isPathing() && key === lastDestKey && t - lastMoveAt < 4000) return;
+            // Truly stuck ~25s with almost no movement — allow one retry below
+        }
+
+        // Idle: throttle repeats of the same destination
+        if (!pathing && !force && key === lastDestKey && elapsed < RETRY_WHILE_IDLE_MS) {
+            return;
         }
 
         lastMoveAt = t;
@@ -123,11 +150,13 @@
                 smart_move(dest);
                 return;
             }
+
             if (dest && typeof dest.x === "number" && typeof dest.y === "number") {
-                // Close range: simple move is snappier near doors/NPCs
-                if ((!dest.map || dest.map === character.map) && dist(character, dest) < 120) {
-                    if (typeof move === "function") move(dest.x, dest.y);
-                    else smart_move({ x: dest.x, y: dest.y, map: character.map });
+                const sameMap = !dest.map || dest.map === character.map;
+                const d = dist(character, dest);
+                // Very close: step without new A* search
+                if (sameMap && d < 80 && typeof move === "function") {
+                    move(dest.x, dest.y);
                     return;
                 }
                 smart_move({
@@ -137,9 +166,8 @@
                 });
                 return;
             }
-            if (dest && dest.name) {
-                smart_move(dest.name);
-            }
+
+            if (dest && dest.name) smart_move(dest.name);
         } catch (e) {
             if (utils().error) utils().error("townNav.pathTo: " + (utils().safeError ? utils().safeError(e) : e));
         }
@@ -147,27 +175,27 @@
 
     function nearBank() {
         try {
-            if (character.map === "bank") return true;
-        } catch (e) { /* ignore */ }
-        return false;
+            return character.map === "bank";
+        } catch (e) {
+            return false;
+        }
     }
 
-    /**
-     * Walk to bank door then transport. Returns true when on bank map.
-     */
     function goBank() {
         ensureCanMove();
         if (nearBank()) return true;
 
-        // Already on a map with a bank door — approach + transport
-        let door = findDoorTo("bank", character.map);
+        // Still searching/walking — wait (prevents search spam)
+        if (isPathing() && (now() - lastMoveAt) < STUCK_REPATH_MS) {
+            return false;
+        }
 
-        // From farm / elsewhere: path via main bank door
+        let door = findDoorTo("bank", character.map);
         if (!door) {
             door = findDoorTo("bank", "main");
             if (door) {
                 if (character.map !== "main") {
-                    pathTo({ x: door.x, y: door.y, map: "main" });
+                    pathTo({ x: door.x, y: door.y, map: "main", key: door.key + ":approach" });
                     return false;
                 }
             } else {
@@ -177,12 +205,10 @@
         }
 
         const d = dist(character, door);
-        // Wide enough to hit door rectangle
         if (d < Math.max(50, (door.w || 40) / 2 + 25)) {
             try {
                 if (typeof transport === "function") {
                     transport("bank", door.destSpawn);
-                    if (utils().log) utils().log("townNav: transport → bank");
                 }
             } catch (e) {
                 if (utils().error) utils().error("transport bank: " + (utils().safeError ? utils().safeError(e) : e));
@@ -190,18 +216,21 @@
             return character.map === "bank";
         }
 
-        pathTo({ x: door.x, y: door.y, map: door.map || character.map });
+        pathTo({
+            x: door.x,
+            y: door.y,
+            map: door.map || character.map,
+            key: door.key
+        });
         return false;
     }
 
-    /**
-     * Leave bank to main (spawn by bank door).
-     */
     function leaveBank() {
         if (character.map !== "bank") return true;
         ensureCanMove();
+        if (isPathing() && (now() - lastMoveAt) < STUCK_REPATH_MS) return false;
+
         try {
-            // Common exit: main spawn index 3 (bank exit). Also try door on bank map.
             const door = findDoorTo("main", "bank");
             if (door && dist(character, door) < 80 && typeof transport === "function") {
                 transport("main", door.destSpawn);
@@ -209,7 +238,8 @@
             }
             if (typeof transport === "function") transport("main", 3);
         } catch (e) { /* ignore */ }
-        pathTo("main");
+
+        if (character.map === "bank") pathTo("main");
         return character.map === "main";
     }
 
@@ -220,9 +250,6 @@
         return !!(npc && dist(character, npc) < 300);
     }
 
-    /**
-     * Go to a town vendor that accepts sell(). Returns true when in range.
-     */
     function goSell() {
         ensureCanMove();
 
@@ -231,14 +258,23 @@
             return false;
         }
 
+        if (isPathing() && (now() - lastMoveAt) < STUCK_REPATH_MS) {
+            return nearSell();
+        }
+
         const npc = findNpcEntity(SELL_NPCS);
         if (npc) {
             if (dist(character, npc) < 300) return true;
-            pathTo({ x: npc.x, y: npc.y, map: character.map });
+            // Stable key by NPC id — NOT floating x,y every tick
+            pathTo({
+                x: npc.x,
+                y: npc.y,
+                map: character.map,
+                key: "sell:" + (npc.id || npc.npc || "vendor")
+            });
             return false;
         }
 
-        // Not in range of NPC entity — use named destination
         if (character.map !== "main") {
             pathTo("main");
             return false;
@@ -247,10 +283,6 @@
         return false;
     }
 
-    /**
-     * Go to a named AL destination (potions, scrolls, upgrade, crab, …).
-     * Returns true when "close enough" heuristics succeed.
-     */
     function goNamed(name, nearCheck) {
         ensureCanMove();
         if (typeof nearCheck === "function" && nearCheck()) return true;
@@ -260,11 +292,19 @@
             return false;
         }
 
-        // Prefer live NPC if name matches
+        if (isPathing() && (now() - lastMoveAt) < STUCK_REPATH_MS) {
+            return false;
+        }
+
         const npc = findNpcEntity([name]);
         if (npc) {
             if (dist(character, npc) < 300) return true;
-            pathTo({ x: npc.x, y: npc.y, map: character.map });
+            pathTo({
+                x: npc.x,
+                y: npc.y,
+                map: character.map,
+                key: "named:" + name
+            });
             return false;
         }
 
@@ -283,24 +323,18 @@
         nearSell: nearSell,
         isPathing: isPathing,
         findDoorTo: findDoorTo,
-        _botVersion: "townNav-v1"
+        _botVersion: "townNav-v2"
     };
 
-    // Attach on every common global AL uses (console BOT === window.BOT)
     try { globalThis.BOT = globalThis.BOT || {}; globalThis.BOT.townNav = api; } catch (e1) { /* ignore */ }
     try {
         if (typeof window !== "undefined") {
             window.BOT = window.BOT || globalThis.BOT || {};
             window.BOT.townNav = api;
-            if (globalThis.BOT && globalThis.BOT !== window.BOT) {
-                // Keep both in sync if they diverged
-                globalThis.BOT.townNav = api;
-            }
         }
     } catch (e2) { /* ignore */ }
 
     try {
         if (typeof game_log === "function") game_log("CORE_TownNav loaded " + api._botVersion, "#A0FFA0");
-        else if (utils().log) utils().log("CORE_TownNav loaded");
     } catch (e3) { /* ignore */ }
 })();

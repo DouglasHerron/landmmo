@@ -527,18 +527,14 @@
     async function smartTo(dest, force) {
         if (BOT.townNav && typeof BOT.townNav.pathTo === "function") {
             const d = (dest && dest.to) ? dest.to : dest;
-            BOT.townNav.pathTo(d, !!force);
+            // Never force-repath every stuck check — townNav handles stuck itself
+            BOT.townNav.pathTo(d, false);
             return;
         }
         const t = now();
-        if (!force) {
-            if (isPathing() && !isMoveStuck()) return;
-            if (t - lastTravelAt < TRAVEL_COOLDOWN_MS) return;
-        }
+        if (isPathing()) return;
+        if (t - lastTravelAt < TRAVEL_COOLDOWN_MS) return;
         lastTravelAt = t;
-        lastMoveX = character.x;
-        lastMoveY = character.y;
-        lastMoveCheckAt = t;
         try {
             if (typeof smart_move === "function") {
                 const d = (dest && dest.to) ? dest.to : dest;
@@ -672,7 +668,7 @@
                         (pickupFrom ? " / " + pickupFrom : "") + ")");
                 }
             }
-            await smartTo(meet, isMoveStuck());
+            await smartTo(meet, false);
             return true;
         }
 
@@ -973,7 +969,7 @@
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
         onCm: onCm,
-        _botVersion: "MER_Logistics_v9"
+        _botVersion: "MER_Logistics_v10"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");

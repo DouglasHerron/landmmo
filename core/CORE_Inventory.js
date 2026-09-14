@@ -509,7 +509,7 @@
         const norm = normalizeDest(dest);
         try {
             if (BOT.townNav && typeof BOT.townNav.pathTo === "function") {
-                BOT.townNav.pathTo(norm, !!force || stuck);
+                BOT.townNav.pathTo(norm, false);
                 return;
             }
             if (typeof smart_move === "function") smart_move(norm);
