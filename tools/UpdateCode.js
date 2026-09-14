@@ -61,11 +61,13 @@
     }
 
     function rawUrl(path) {
-        return "https://cdn.jsdelivr.net/gh/" + REPO + "@" + BRANCH + "/" + path;
+        // Cache-bust so syncs aren't stuck on stale jsDelivr/CDN copies
+        const bust = "t=" + Date.now();
+        return "https://raw.githubusercontent.com/" + REPO + "/" + BRANCH + "/" + path + "?" + bust;
     }
 
-    function rawUrlGithub(path) {
-        return "https://raw.githubusercontent.com/" + REPO + "/" + BRANCH + "/" + path;
+    function rawUrlJsdelivr(path) {
+        return "https://cdn.jsdelivr.net/gh/" + REPO + "@" + BRANCH + "/" + path;
     }
 
     function fetchText(url) {
@@ -90,8 +92,8 @@
         try {
             return await fetchText(rawUrl(path));
         } catch (e1) {
-            log("jsDelivr failed, trying raw GitHub...", "#FFD080");
-            return await fetchText(rawUrlGithub(path));
+            log("raw GitHub failed, trying jsDelivr...", "#FFD080");
+            return await fetchText(rawUrlJsdelivr(path));
         }
     }
 
