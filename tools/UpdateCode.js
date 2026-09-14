@@ -300,8 +300,8 @@
                 if (!code || !String(code).trim()) throw new Error("Empty response");
                 const finger = codeFingerprint(file.name, code);
                 log("  got " + file.name + ": " + finger);
-                if (file.name === "MER_Logistics" && String(finger).indexOf("v13") < 0) {
-                    log("  WARNING: expected MER_Logistics_v13+, got " + finger, "#FF8080");
+                if (file.name === "MER_Logistics" && String(finger).indexOf("v14") < 0) {
+                    log("  WARNING: expected MER_Logistics_v14+, got " + finger, "#FF8080");
                 }
                 await saveCode(file.slot, file.name, code);
                 log("save_code sent: " + file.name + "." + file.slot + ".js", "#A0FFA0");

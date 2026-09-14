@@ -16,6 +16,9 @@
     /** @type {Object.<string, number>} item name → skip-until timestamp (unbuyable / failed buy) */
     let buySkipUntil = {};
     let scoutAnnounceAt = 0;
+    /** Named dest we last sought for upgrade/compound ("upgrade" | "compound") */
+    let lastGearTravelLogAt = 0;
+    let upgradeFailStreak = 0;
     let scoutTravelDone = false;
     let pickupRequestedAt = Date.now(); // force first farm trip on load
     let pickupFrom = "";
@@ -477,8 +480,76 @@
         return false;
     }
 
-    function nearUpgrade() {
-        return nearNpc(["upgrade", "compound"]);
+    function townNavPathing() {
+        try {
+            if (BOT.townNav && typeof BOT.townNav.isPathing === "function") {
+                return !!BOT.townNav.isPathing();
+            }
+        } catch (e) { /* ignore */ }
+        return isPathing();
+    }
+
+    /**
+     * Upgrade table vs compound table are different spots.
+     * Accessories (ringsj/hpbelt/…) need "compound"; weapons/armor need "upgrade".
+     */
+    function gearBenchNeeded() {
+        if (findCompoundSet()) return "compound";
+        if (findUpgradeSlot() !== -1) return "upgrade";
+        return "";
+    }
+
+    /** @type {{ dest: string, issued: boolean, sawMove: boolean, idleAt: number }} */
+    let gearTravel = { dest: "", issued: false, sawMove: false, idleAt: 0 };
+
+    function resetGearTravel() {
+        gearTravel = { dest: "", issued: false, sawMove: false, idleAt: 0 };
+        upgradeFailStreak = 0;
+    }
+
+    function nearGearBench(dest) {
+        const want = dest || gearBenchNeeded() || "upgrade";
+        // Place coords from find_npc when available
+        if (nearNpc([want])) return true;
+
+        if (!gearTravel.issued || gearTravel.dest !== want) return false;
+
+        if (townNavPathing()) {
+            gearTravel.sawMove = true;
+            gearTravel.idleAt = 0;
+            return false;
+        }
+
+        // Path never started (already there / throttled) — settle after a short idle
+        if (!gearTravel.sawMove) {
+            if (!gearTravel.idleAt) gearTravel.idleAt = now();
+            if (now() - gearTravel.idleAt < 2500) return false;
+            gearTravel.sawMove = true;
+            gearTravel.idleAt = now();
+        }
+
+        if (!gearTravel.idleAt) gearTravel.idleAt = now();
+        return (now() - gearTravel.idleAt) > 700;
+    }
+
+    function goToGearBench(dest) {
+        if (gearTravel.dest !== dest) {
+            gearTravel = { dest: dest, issued: true, sawMove: false, idleAt: 0 };
+        } else {
+            gearTravel.issued = true;
+        }
+
+        const t = now();
+        if (t - lastGearTravelLogAt > 8000) {
+            lastGearTravelLogAt = t;
+            if (utils().log) utils().log("Dorchant → " + dest + " (gear bench)");
+        }
+
+        if (BOT.townNav && typeof BOT.townNav.goNamed === "function") {
+            BOT.townNav.goNamed(dest);
+        } else {
+            smartTo(dest, false);
+        }
     }
 
     function nearScrolls() {
@@ -943,14 +1014,15 @@
 
     function tryUpgradeOnce() {
         const t = now();
-        if (t - lastUpgradeAt < UPGRADE_COOLDOWN_MS) return false;
-        if (isUpgrading()) return false;
+        if (t - lastUpgradeAt < UPGRADE_COOLDOWN_MS) return { ok: false, reason: "cooldown" };
+        if (isUpgrading()) return { ok: false, reason: "busy" };
 
         const set = findCompoundSet();
         if (set) {
             const item = character.items[set.a];
-            const scrollSlot = findScrollSlot(scrollName(item, true));
-            if (scrollSlot < 0) return false;
+            const sName = scrollName(item, true);
+            const scrollSlot = findScrollSlot(sName);
+            if (scrollSlot < 0) return { ok: false, reason: "need " + sName };
             try {
                 if (typeof compound === "function") {
                     compound(set.a, set.b, set.c, scrollSlot);
@@ -958,19 +1030,21 @@
                     if (utils().log) {
                         utils().log("Compound " + item.name + " +" + (item.level || 0));
                     }
-                    return true;
+                    return { ok: true };
                 }
             } catch (e) {
                 if (utils().error) utils().error("compound: " + (utils().safeError ? utils().safeError(e) : e));
+                return { ok: false, reason: "compound error" };
             }
-            return false;
+            return { ok: false, reason: "no compound()" };
         }
 
         const slot = findUpgradeSlot();
-        if (slot < 0) return false;
+        if (slot < 0) return { ok: false, reason: "no work" };
         const item = character.items[slot];
-        const scrollSlot = findScrollSlot(scrollName(item, false));
-        if (scrollSlot < 0) return false;
+        const sName = scrollName(item, false);
+        const scrollSlot = findScrollSlot(sName);
+        if (scrollSlot < 0) return { ok: false, reason: "need " + sName };
 
         try {
             if (typeof upgrade === "function") {
@@ -979,37 +1053,99 @@
                 if (utils().log) {
                     utils().log("Upgrade " + item.name + " +" + (item.level || 0));
                 }
-                return true;
+                return { ok: true };
             }
         } catch (e) {
             if (utils().error) utils().error("upgrade: " + (utils().safeError ? utils().safeError(e) : e));
+            return { ok: false, reason: "upgrade error" };
         }
-        return false;
+        return { ok: false, reason: "no upgrade()" };
     }
 
     async function handleUpgrade() {
         if (!upgradeCfg().enabled) return false;
-        if (!hasUpgradeWork()) return false;
+        if (!hasUpgradeWork()) {
+            resetGearTravel();
+            return false;
+        }
 
         if (isUpgrading()) return true;
-        if (isPathing()) return true;
+        if (townNavPathing()) return true;
 
+        // Need scrolls before standing at the bench
         if (scrollsToBuy().length) {
             await buyNeededScrolls();
             return true;
         }
 
-        if (!nearUpgrade()) {
-            if (utils().log) utils().log("Dorchant → upgrade");
-            if (BOT.townNav && typeof BOT.townNav.goNamed === "function") {
-                BOT.townNav.goNamed("upgrade");
-            } else {
-                await smartTo("upgrade");
-            }
+        const bench = gearBenchNeeded();
+        if (!bench) {
+            resetGearTravel();
+            return false;
+        }
+
+        if (!nearGearBench(bench)) {
+            goToGearBench(bench);
             return true;
         }
 
-        tryUpgradeOnce();
+        const result = tryUpgradeOnce();
+        if (result.ok) {
+            upgradeFailStreak = 0;
+            return true;
+        }
+
+        if (result.reason === "cooldown" || result.reason === "busy") return true;
+
+        upgradeFailStreak++;
+        if (upgradeFailStreak === 1 || upgradeFailStreak % 8 === 0) {
+            if (utils().log) {
+                utils().log("Upgrade wait @ " + bench + ": " + (result.reason || "unknown") +
+                    " (scroll0=" + quantity("scroll0") +
+                    " cscroll0=" + quantity("cscroll0") + ")");
+            }
+        }
+
+        // Missing scrolls — force a buy trip even under gold reserve if possible
+        if (result.reason && result.reason.indexOf("need ") === 0) {
+            const needName = result.reason.slice(5);
+            if (quantity(needName) < 1) {
+                if (!nearScrolls()) {
+                    if (utils().log) utils().log("Dorchant → scrolls (need " + needName + ")");
+                    if (BOT.townNav && typeof BOT.townNav.goNamed === "function") {
+                        BOT.townNav.goNamed("scrolls");
+                    } else {
+                        await smartTo("scrolls");
+                    }
+                    resetGearTravel();
+                    return true;
+                }
+                try {
+                    if (typeof buy === "function") {
+                        const g = gItem(needName);
+                        const price = g && typeof g.g === "number" ? g.g : 0;
+                        if (gold() >= price * 10 && price > 0) {
+                            buy(needName, 10);
+                            if (utils().log) utils().log("Bought 10 " + needName);
+                        } else if (utils().log) {
+                            utils().log("Cannot buy " + needName + " (gold=" + gold() + ")");
+                        }
+                    }
+                } catch (e) {
+                    if (utils().error) utils().error("buy " + needName + ": " + (utils().safeError ? utils().safeError(e) : e));
+                }
+                return true;
+            }
+        }
+
+        // Don't spin forever if something else is wrong
+        if (upgradeFailStreak > 40) {
+            if (utils().log) utils().log("Upgrade stuck — backing off");
+            resetGearTravel();
+            upgradeFailStreak = 0;
+            lastUpgradeAt = now() + 15000;
+            return false;
+        }
         return true;
     }
 
@@ -1050,8 +1186,8 @@
         usefulMaxLevel: usefulMaxLevel,
         onCm: onCm,
         npcSells: npcSells,
-        _botVersion: "MER_Logistics_v13"
+        _botVersion: "MER_Logistics_v14"
     };
 
-    if (utils().log) utils().log("MER_Logistics loaded (v13)");
+    if (utils().log) utils().log("MER_Logistics loaded (v14)");
 })();
