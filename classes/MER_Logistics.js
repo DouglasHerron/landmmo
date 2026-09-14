@@ -525,6 +525,11 @@
     }
 
     async function smartTo(dest, force) {
+        if (BOT.townNav && typeof BOT.townNav.pathTo === "function") {
+            const d = (dest && dest.to) ? dest.to : dest;
+            BOT.townNav.pathTo(d, !!force);
+            return;
+        }
         const t = now();
         if (!force) {
             if (isPathing() && !isMoveStuck()) return;
@@ -535,7 +540,10 @@
         lastMoveY = character.y;
         lastMoveCheckAt = t;
         try {
-            if (typeof smart_move === "function") smart_move(dest);
+            if (typeof smart_move === "function") {
+                const d = (dest && dest.to) ? dest.to : dest;
+                smart_move(d);
+            }
         } catch (e) {
             if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
         }
@@ -581,13 +589,10 @@
         const home = homeCfg();
         if (utils().log) utils().log("Dorchant → home (" + (home.to || "coords") + ")");
         if (home.to === "bank") {
-            // Same path as inventory — string dest + door transport
-            try {
-                if (character.map !== "bank" && typeof smart_move === "function") {
-                    smart_move("bank");
-                }
-            } catch (e) { /* ignore */ }
-            return;
+            if (BOT.townNav && typeof BOT.townNav.goBank === "function") {
+                BOT.townNav.goBank();
+                return;
+            }
         }
         if (home.to) await smartTo(home.to);
         else if (typeof home.x === "number") await smartTo(home);
@@ -800,7 +805,11 @@
 
         if (!nearScrolls()) {
             if (utils().log) utils().log("Dorchant → scrolls");
-            await smartTo({ to: "scrolls" });
+            if (BOT.townNav && typeof BOT.townNav.goNamed === "function") {
+                BOT.townNav.goNamed("scrolls");
+            } else {
+                await smartTo("scrolls");
+            }
             return true;
         }
 
@@ -834,7 +843,11 @@
         // Town vendors — main map near shops
         if (character.map === "bank" || !nearNpc(["basics", "weapons", "armors", "scrolls"])) {
             if (utils().log) utils().log("Dorchant → town (buy gear)");
-            await smartTo({ to: "main" });
+            if (BOT.townNav && typeof BOT.townNav.goSell === "function") {
+                BOT.townNav.goSell();
+            } else {
+                await smartTo("main");
+            }
             return true;
         }
 
@@ -912,7 +925,11 @@
 
         if (!nearUpgrade()) {
             if (utils().log) utils().log("Dorchant → upgrade");
-            await smartTo({ to: "upgrade" });
+            if (BOT.townNav && typeof BOT.townNav.goNamed === "function") {
+                BOT.townNav.goNamed("upgrade");
+            } else {
+                await smartTo("upgrade");
+            }
             return true;
         }
 
@@ -956,7 +973,7 @@
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
         onCm: onCm,
-        _botVersion: "MER_Logistics_v8"
+        _botVersion: "MER_Logistics_v9"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");

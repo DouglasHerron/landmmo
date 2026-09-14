@@ -33,6 +33,7 @@
         { slot: "14", name: "CORE_Restock", path: "core/CORE_Restock.js" },
         { slot: "15", name: "CORE_Travel", path: "core/CORE_Travel.js" },
         { slot: "16", name: "CORE_Benchmark", path: "core/CORE_Benchmark.js" },
+        { slot: "17", name: "CORE_TownNav", path: "core/CORE_TownNav.js" },
         { slot: "20", name: "WAR_Combat", path: "classes/WAR_Combat.js" },
         { slot: "21", name: "PRI_Combat", path: "classes/PRI_Combat.js" },
         { slot: "22", name: "MER_Logistics", path: "classes/MER_Logistics.js" },

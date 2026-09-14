@@ -20,7 +20,8 @@ Modular JavaScript framework for [Adventure Land](https://adventure.land) automa
 │   ├── CORE_Inventory.js
 │   ├── CORE_Restock.js
 │   ├── CORE_Travel.js
-│   └── CORE_Benchmark.js
+│   ├── CORE_Benchmark.js
+│   └── CORE_TownNav.js
 ├── classes/
 │   ├── WAR_Combat.js
 │   ├── PRI_Combat.js

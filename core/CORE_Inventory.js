@@ -135,12 +135,16 @@
 
     function nearMerchant() {
         try {
-            if (typeof find_npc === "function") {
-                const npc = find_npc("basics") || find_npc("exchange") || find_npc("pots") || find_npc("fancypots");
-                if (npc && utils().distanceTo && utils().distanceTo(npc) < 350) return true;
+            if (BOT.townNav && typeof BOT.townNav.nearSell === "function") {
+                return BOT.townNav.nearSell();
             }
         } catch (e) { /* ignore */ }
-        // No plaza fallback — that caused false "arrived" and sell loops
+        try {
+            if (typeof find_npc === "function") {
+                const npc = find_npc("basics") || find_npc("exchange") || find_npc("pots") || find_npc("fancypots");
+                if (npc && utils().distanceTo && utils().distanceTo(npc) < 300) return true;
+            }
+        } catch (e) { /* ignore */ }
         return false;
     }
 
@@ -165,11 +169,12 @@
 
     function nearBank() {
         try {
-            if (character.map === "bank") return true;
-            if (typeof find_npc === "function") {
-                const npc = find_npc("bank");
-                if (npc && utils().distanceTo && utils().distanceTo(npc) < 400) return true;
+            if (BOT.townNav && typeof BOT.townNav.nearBank === "function") {
+                return BOT.townNav.nearBank();
             }
+        } catch (e) { /* ignore */ }
+        try {
+            if (character.map === "bank") return true;
         } catch (e) { /* ignore */ }
         return false;
     }
@@ -447,31 +452,35 @@
         }
     }
 
-    /** Enter bank door when close enough (smart_move sometimes stops outside). */
-    function tryTransportBank() {
-        if (character.map === "bank") return true;
-        if (typeof transport !== "function") return false;
-        try {
-            const doors = (typeof G !== "undefined" && G.maps && G.maps[character.map] && G.maps[character.map].doors) || [];
-            for (let i = 0; i < doors.length; i++) {
-                const d = doors[i];
-                if (!d || d[4] !== "bank") continue;
-                const dx = character.x - d[0];
-                const dy = character.y - d[1];
-                if (Math.sqrt(dx * dx + dy * dy) < 60) {
-                    transport("bank", d[5] || 0);
-                    if (utils().log) utils().log("transport → bank");
-                    return true;
-                }
+    /** Prefer townNav for bank/sell; fall back to smart_move. */
+    function travelSell() {
+        if (BOT.townNav && typeof BOT.townNav.goSell === "function") {
+            if (utils().log && (!travelSell._lastLog || now() - travelSell._lastLog > 15000)) {
+                utils().log("Traveling to merchant to sell junk");
+                travelSell._lastLog = now();
             }
-        } catch (e) { /* ignore */ }
-        return false;
+            return BOT.townNav.goSell();
+        }
+        startMove("basics", "Traveling to merchant to sell junk", isMoveStuck());
+        return nearMerchant();
+    }
+
+    function travelBank() {
+        if (BOT.townNav && typeof BOT.townNav.goBank === "function") {
+            if (utils().log && (!travelBank._lastLog || now() - travelBank._lastLog > 15000)) {
+                utils().log("Traveling to bank");
+                travelBank._lastLog = now();
+            }
+            return BOT.townNav.goBank();
+        }
+        startMove("bank", "Traveling to bank", isMoveStuck());
+        return nearBank();
     }
 
     function normalizeDest(dest) {
         if (!dest) return dest;
         if (typeof dest === "string") return dest;
-        if (dest.to) return dest.to; // "bank" / "main" — string form is more reliable
+        if (dest.to) return dest.to;
         return dest;
     }
 
@@ -485,8 +494,11 @@
         lastMoveY = character.y;
         lastMoveCheckAt = lastActionAt;
 
+        if (BOT.townNav && typeof BOT.townNav.ensureCanMove === "function") {
+            BOT.townNav.ensureCanMove();
+        }
+
         if (utils().log) {
-            // Avoid spamming the same travel line every retry
             if (!startMove._lastLabel || startMove._lastLabel !== label || now() - (startMove._lastLogAt || 0) > 15000) {
                 utils().log(label || ("Moving to " + (dest && dest.to ? dest.to : dest)));
                 startMove._lastLabel = label;
@@ -494,13 +506,12 @@
             }
         }
 
-        // Bank: try door transport if already at entrance
         const norm = normalizeDest(dest);
-        if (norm === "bank") {
-            if (tryTransportBank()) return;
-        }
-
         try {
+            if (BOT.townNav && typeof BOT.townNav.pathTo === "function") {
+                BOT.townNav.pathTo(norm, !!force || stuck);
+                return;
+            }
             if (typeof smart_move === "function") smart_move(norm);
         } catch (e) {
             if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
@@ -596,7 +607,7 @@
                 if (isMerchant() && cfg.autoSell !== false && hasJunkToSell() && t >= sellCooldownUntil) {
                     missingJunkTicks = 0;
                     setState("traveling_sell");
-                    startMove("main", "Traveling to merchant to sell junk", true);
+                    travelSell();
                     return true;
                 }
 
@@ -605,7 +616,7 @@
                 if (cfg.autoSell !== false && inventoryFullSoon() && hasJunkToSell() && t >= sellCooldownUntil) {
                     missingJunkTicks = 0;
                     setState("traveling_sell");
-                    startMove("main", "Traveling to merchant to sell junk", true);
+                    travelSell();
                     return true;
                 }
 
@@ -613,11 +624,11 @@
                     if (cfg.autoSell !== false && hasJunkToSell() && t >= sellCooldownUntil) {
                         missingJunkTicks = 0;
                         setState("traveling_sell");
-                        startMove("main", "Traveling to merchant to sell junk", true);
+                        travelSell();
                         return true;
                     }
                     setState("traveling_bank");
-                    startMove("bank", "Traveling to bank", true);
+                    travelBank();
                     return true;
                 }
 
@@ -639,7 +650,7 @@
                 }
 
                 if (!nearMerchant()) {
-                    startMove("main", "Traveling to merchant to sell junk", isMoveStuck());
+                    travelSell();
                     return true;
                 }
 
@@ -656,7 +667,7 @@
                 if (inventoryFullSoon() && cfg.autoBank !== false && findBankSlot() !== -1) {
                     missingJunkTicks = 0;
                     setState("traveling_bank");
-                    startMove("bank", "Traveling to bank", true);
+                    travelBank();
                     return true;
                 }
 
@@ -673,8 +684,7 @@
                     sellJunk();
                 }
                 if (!nearBank()) {
-                    tryTransportBank();
-                    startMove("bank", "Traveling to bank", isMoveStuck());
+                    travelBank();
                     return true;
                 }
                 setState("banking");

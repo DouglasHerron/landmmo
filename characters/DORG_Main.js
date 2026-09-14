@@ -82,6 +82,7 @@
             { slot: 10, name: "CORE_Utils" },
             { slot: 11, name: "CORE_Party" },
             { slot: 12, name: "CORE_Survival" },
+            { slot: 17, name: "CORE_TownNav" },
             { slot: 13, name: "CORE_Inventory" },
             { slot: 14, name: "CORE_Restock" },
             { slot: 15, name: "CORE_Travel" },

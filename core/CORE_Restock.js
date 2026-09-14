@@ -130,7 +130,19 @@
         lastTravelAt = now();
         if (utils().log && label) utils().log(label);
         try {
-            if (typeof smart_move === "function") smart_move(dest);
+            if (BOT.townNav && typeof BOT.townNav.ensureCanMove === "function") {
+                BOT.townNav.ensureCanMove();
+            }
+            const d = (dest && dest.to) ? dest.to : dest;
+            if (d === "potions" && BOT.townNav && typeof BOT.townNav.goNamed === "function") {
+                BOT.townNav.goNamed("potions");
+                return;
+            }
+            if (BOT.townNav && typeof BOT.townNav.pathTo === "function") {
+                BOT.townNav.pathTo(d);
+                return;
+            }
+            if (typeof smart_move === "function") smart_move(d);
         } catch (e) {
             if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
         }
