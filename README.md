@@ -5,6 +5,8 @@ Modular JavaScript framework for [Adventure Land](https://adventure.land) automa
 **Characters**
 - **Dorg** — Warrior, party leader, crab farmer
 - **Prorg** — Priest, heals / follows / assists Dorg
+- **Dorchant** — Merchant mule (bank home; sell / pots / gear logistics)
+- *(planned)* 2 more combat members → 4 party + Dorchant = 5
 
 ---
 
@@ -21,12 +23,15 @@ Modular JavaScript framework for [Adventure Land](https://adventure.land) automa
 │   └── CORE_Benchmark.js
 ├── classes/
 │   ├── WAR_Combat.js
-│   └── PRI_Combat.js
+│   ├── PRI_Combat.js
+│   └── MER_Logistics.js
 ├── characters/
 │   ├── DORG_Config.js
 │   ├── DORG_Main.js
 │   ├── PRORG_Config.js
-│   └── PRORG_Main.js
+│   ├── PRORG_Main.js
+│   ├── DORCHANT_Config.js
+│   └── DORCHANT_Main.js
 └── tools/
     └── UpdateCode.js
 ```
@@ -103,7 +108,7 @@ await BOT_UPDATE.run(["DORG_Main", "CORE_Party", "WAR_Combat"])
 
 **Security:** never put GitHub PATs, tokens, or passwords in CODE. Public repo + raw URLs only. For a private repo, paste files manually or use a local proxy you control.
 
-After syncing, reload `DORG_Main` / `PRORG_Main` on each character.
+After syncing, reload `DORG_Main` / `PRORG_Main` / `DORCHANT_Main` on each character.
 
 ---
 
@@ -167,24 +172,52 @@ Selling only happens after travel to a vendor — never from the farm.
 
 ---
 
+## How to run Dorchant
+
+1. Sync CODE (includes `MER_Logistics`, `DORCHANT_Config`, `DORCHANT_Main`).
+2. On **Dorchant**, run / load: **`DORCHANT_Main`**
+3. Dorchant accepts Dorg’s invite and stays near the **bank** (`config.home`).
+4. Can sell whitelist junk / bank loot / restock pots, then return to bank (not the farm).
+5. **Gear progression:** scouts the farm, reads party slots, then buys/upgrades/compounds **only gaps** vs `upgrade.targets`. Console: `BOT.logistics.gearReport()`.
+
+Next mule phases (not done yet): pickup dumps from farmers, deliver finished gear/pots.
+
+---
+
 ## Add a new class later
 
-1. Add `classes/MAGE_Combat.js` (or `MER_Logistics.js`) attaching to `BOT.combat` (or another namespace).
+1. Add `classes/MAGE_Combat.js` (etc.) attaching to `BOT.combat` (or `BOT.logistics` for merchant).
 2. Add `characters/NAME_Config.js` with `role` + `BOT.config`.
-3. Add `characters/NAME_Main.js` that loads CORE modules + the class module and runs the same priority loop.
+3. Add `characters/NAME_Main.js` that loads CORE modules + the class module and runs the priority loop.
 4. Register the new files in `tools/UpdateCode.js` → `FILES`.
-5. Sync CODE slots, then load that character’s Main.
+5. Add the name to Dorg’s `party.members`, sync, then load that character’s Main.
 
 Keep generic behavior in **CORE_***; only put class-unique logic in **classes/**.
 
-Merchant (future) should own bank cleanup, selling, combining, buying, and gear logistics — not Warrior/Priest mains.
+**Dorchant** owns bank cleanup, selling, combining, buying, and gear logistics — combat mains should eventually stop leaving the farm for town.
 
 ---
+
+## Party gear targets (Dorchant)
+
+Configured in `DORCHANT_Config` → `upgrade.targets`:
+
+| For | Items | Cap |
+|-----|--------|-----|
+| Dorg | blade | +6 |
+| Dorg | helmet, coat, pants, gloves, shoes | +5 |
+| Dorg | strring, strearring (compound) | +3 |
+| Prorg | staff | +6 |
+| Prorg | helmet, coat, pants, gloves, shoes | +5 |
+| Prorg | intring, intearring (compound) | +3 |
+
+Wishlist gear below useful max (party still needs it) is held in inventory. Items the whole party already has at cap are not bought or upgraded further.
+
+Scout visits `scout.meet` (default `crab`) so Dorchant can see slots — bank range cannot.
 
 ## Standalone scripts (not in Main loop)
 
 Planned separate CODE tools (not required for the core farm loop):
-- Gear upgrade (Warrior toward +6 via `upgrade` + `item_grade`)
 - Anniversary exchange (`anniversarygift` via **Xyn**, not Mira)
 
 ---

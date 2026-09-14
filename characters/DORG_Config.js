@@ -14,7 +14,7 @@
 
             party: {
                 leader: "Dorg",
-                members: ["Prorg"]
+                members: ["Prorg", "Dorchant"]
             },
 
             farm: {

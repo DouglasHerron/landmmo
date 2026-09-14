@@ -24,6 +24,16 @@
         return (BOT.config && BOT.config.farm && BOT.config.farm.monster) || "crab";
     }
 
+    /** Farmers → farm monster; merchant → config.home (e.g. { to: "bank" }). */
+    function returnDest() {
+        const home = BOT.config && BOT.config.home;
+        if (home) {
+            if (home.to) return { to: home.to };
+            if (typeof home.x === "number" && typeof home.y === "number") return home;
+        }
+        return farmMonster();
+    }
+
     function usedSlots() {
         if (typeof character === "undefined" || !character || !character.items) return 0;
         let used = 0;
@@ -92,6 +102,14 @@
         if (cfg.autoBank === false) return false;
 
         if (isProtected(item)) return false;
+        // Merchant wishlist gear — keep in inventory until upgrade hits maxLevel
+        try {
+            if (BOT.logistics && typeof BOT.logistics.shouldHoldItem === "function" && BOT.logistics.shouldHoldItem(item)) {
+                return false;
+            }
+        } catch (e) {
+            // ignore
+        }
         if (isLocked(item)) return true; // don't sell; bank if needed
         if (item.name === "anniversarygift") return true;
         if (shouldSell(item)) return false;
@@ -255,11 +273,12 @@
     }
 
     async function returnToFarm() {
-        const monster = farmMonster();
-        if (utils().log) utils().log("Returning to farm: " + monster);
+        const dest = returnDest();
+        const label = (dest && dest.to) || dest || "?";
+        if (utils().log) utils().log("Returning to: " + label);
         try {
             if (typeof smart_move === "function") {
-                await smart_move(monster);
+                await smart_move(dest);
             }
         } catch (e) {
             if (utils().error) utils().error("returnToFarm: " + (utils().safeError ? utils().safeError(e) : e));

@@ -35,10 +35,13 @@
         { slot: "16", name: "CORE_Benchmark", path: "core/CORE_Benchmark.js" },
         { slot: "20", name: "WAR_Combat", path: "classes/WAR_Combat.js" },
         { slot: "21", name: "PRI_Combat", path: "classes/PRI_Combat.js" },
+        { slot: "22", name: "MER_Logistics", path: "classes/MER_Logistics.js" },
         { slot: "30", name: "DORG_Config", path: "characters/DORG_Config.js" },
         { slot: "31", name: "DORG_Main", path: "characters/DORG_Main.js" },
         { slot: "32", name: "PRORG_Config", path: "characters/PRORG_Config.js" },
         { slot: "33", name: "PRORG_Main", path: "characters/PRORG_Main.js" },
+        { slot: "34", name: "DORCHANT_Config", path: "characters/DORCHANT_Config.js" },
+        { slot: "35", name: "DORCHANT_Main", path: "characters/DORCHANT_Main.js" },
         { slot: "40", name: "UpdateCode", path: "tools/UpdateCode.js" }
     ];
 

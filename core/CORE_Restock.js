@@ -24,6 +24,16 @@
         return (BOT.config && BOT.config.farm && BOT.config.farm.monster) || "crab";
     }
 
+    /** Farmers → farm monster; merchant → config.home (e.g. { to: "bank" }). */
+    function returnDest() {
+        const home = BOT.config && BOT.config.home;
+        if (home) {
+            if (home.to) return { to: home.to };
+            if (typeof home.x === "number" && typeof home.y === "number") return home;
+        }
+        return farmMonster();
+    }
+
     function quantity(name) {
         if (!name || typeof character === "undefined" || !character.items) return 0;
 
@@ -123,11 +133,12 @@
     }
 
     async function returnToFarm() {
-        const monster = farmMonster();
-        if (utils().log) utils().log("Restock done — returning to " + monster);
+        const dest = returnDest();
+        const label = (dest && dest.to) || dest || "?";
+        if (utils().log) utils().log("Restock done — returning to " + label);
         try {
             if (typeof smart_move === "function") {
-                await smart_move(monster);
+                await smart_move(dest);
             }
         } catch (e) {
             if (utils().error) utils().error("restock return: " + (utils().safeError ? utils().safeError(e) : e));
