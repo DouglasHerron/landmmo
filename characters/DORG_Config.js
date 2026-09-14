@@ -49,10 +49,12 @@
                 desiredMpPotions: 500
             },
 
-            // Dorchant handles sell/bank — farmers dump when he's nearby
+            // Dorchant handles sell/bank — farmers dump loot + excess gold when he's nearby
             mule: {
                 name: "Dorchant",
-                dumpDistance: 320
+                dumpDistance: 320,
+                sendGold: true,
+                keepGold: 250000
             },
 
             inventory: {

@@ -316,23 +316,64 @@
         return false;
     }
 
+    function keepGold() {
+        const g = muleCfg().keepGold;
+        return typeof g === "number" ? g : 200000;
+    }
+
+    function excessGold() {
+        try {
+            const have = (character && character.gold) || 0;
+            return Math.max(0, have - keepGold());
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    function needsGoldSend() {
+        if (!muleEnabled()) return false;
+        if (muleCfg().sendGold === false) return false;
+        return excessGold() > 1000;
+    }
+
+    function sendGoldToMule() {
+        const mule = muleInRange();
+        if (!mule) return false;
+        const amount = excessGold();
+        if (amount <= 1000) return false;
+        try {
+            if (typeof send_gold === "function") {
+                send_gold(mule.name, amount);
+                if (utils().log) utils().log("Sent " + amount + " gold → " + mule.name);
+                return true;
+            }
+        } catch (e) {
+            if (utils().error) utils().error("send_gold: " + (utils().safeError ? utils().safeError(e) : e));
+        }
+        return false;
+    }
+
     /**
-     * Farmer mule path: dump to Dorchant when nearby; never leave farm if mule is set.
+     * Farmer mule path: dump loot + excess gold to Dorchant when nearby.
      * @returns {boolean|null} true = busy dumping, false = nothing to do, null = fall through to town
      */
     function handleMuleDump() {
         if (!muleEnabled()) return null;
         if (BOT.role === "merchant") return null;
 
-        if (!needsDump()) return false;
+        const wantsDump = needsDump();
+        const wantsGold = needsGoldSend();
+        if (!wantsDump && !wantsGold) return false;
 
         if (muleInRange()) {
-            dumpOneToMule();
+            // Gold first (one transfer), then items one slot per tick
+            if (wantsGold) sendGoldToMule();
+            else if (wantsDump) dumpOneToMule();
             return true;
         }
 
-        // Wait for mule — request pickup, stay on farm (no town trip)
-        requestMule();
+        // Items full → request pickup; gold can wait until next visit
+        if (wantsDump) requestMule();
         return false;
     }
 

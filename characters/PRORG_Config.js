@@ -53,7 +53,9 @@
 
             mule: {
                 name: "Dorchant",
-                dumpDistance: 320
+                dumpDistance: 320,
+                sendGold: true,
+                keepGold: 200000
             },
 
             inventory: {
