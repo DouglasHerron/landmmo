@@ -1,22 +1,19 @@
 /**
  * UpdateCode.js
- * Pulls bot modules from a public GitHub repo and writes them into
- * Adventure Land saved CODE slots via parent.api_call("save_code", ...).
+ * Pulls bot modules from GitHub into Adventure Land CODE slots.
  *
- * IMPORTANT:
- * - Adventure Land REQUIRES a numeric `slot` to save. Name alone is not enough.
- * - You do NOT need empty slots created first — save_code creates/overwrites by slot #.
- * - Slots 3–100 need an Ancient Computer unlock (slots 1–2 are always free).
- *
- * SECURITY:
- * - Do NOT put GitHub PATs, passwords, or API keys in this file.
+ * Why slots may not show up:
+ * - save_code REQUIRES slot as a string/number + name + code
+ * - The CODE "Load" UI often needs list_codes / reopen CODE to refresh
+ * - Slots 3–100 need Ancient Computer (1–2 always free)
+ * - Our old "OK" log was optimistic — this version VERIFIES via list_codes
  *
  * Usage:
- *   1. Paste this file into ONE CODE slot (any free slot), name it UpdateCode, SAVE, RUN
- *   2. In the CODE console / runner:
- *        await BOT_UPDATE.run()
- *   3. Open CODE list and confirm new named slots appeared
- *   4. On Dorg: load_code("DORG_Main")   On Prorg: load_code("PRORG_Main")
+ *   1. Paste into a CODE slot, Save, Run
+ *   2. await BOT_UPDATE.run()
+ *   3. await BOT_UPDATE.list()     // shows what the server actually has
+ *   4. Close/reopen CODE window if names still missing from Load dropdown
+ *   5. Or chat: /loadcode DORG_Main   or   /loadcode 31
  */
 (function () {
     "use strict";
@@ -25,25 +22,24 @@
     const BRANCH = "main";
 
     /**
-     * Fixed slot map.
-     * Change numbers if they collide with your existing CODE.
-     * load_code("Name") works by name once saved — slot is only for save_code.
+     * Fixed slot map (slot sent as STRING — matches working community scripts).
+     * Change if these collide with your existing CODE.
      */
     const FILES = [
-        { slot: 10, name: "CORE_Utils", path: "core/CORE_Utils.js" },
-        { slot: 11, name: "CORE_Party", path: "core/CORE_Party.js" },
-        { slot: 12, name: "CORE_Survival", path: "core/CORE_Survival.js" },
-        { slot: 13, name: "CORE_Inventory", path: "core/CORE_Inventory.js" },
-        { slot: 14, name: "CORE_Restock", path: "core/CORE_Restock.js" },
-        { slot: 15, name: "CORE_Travel", path: "core/CORE_Travel.js" },
-        { slot: 16, name: "CORE_Benchmark", path: "core/CORE_Benchmark.js" },
-        { slot: 20, name: "WAR_Combat", path: "classes/WAR_Combat.js" },
-        { slot: 21, name: "PRI_Combat", path: "classes/PRI_Combat.js" },
-        { slot: 30, name: "DORG_Config", path: "characters/DORG_Config.js" },
-        { slot: 31, name: "DORG_Main", path: "characters/DORG_Main.js" },
-        { slot: 32, name: "PRORG_Config", path: "characters/PRORG_Config.js" },
-        { slot: 33, name: "PRORG_Main", path: "characters/PRORG_Main.js" },
-        { slot: 40, name: "UpdateCode", path: "tools/UpdateCode.js" }
+        { slot: "10", name: "CORE_Utils", path: "core/CORE_Utils.js" },
+        { slot: "11", name: "CORE_Party", path: "core/CORE_Party.js" },
+        { slot: "12", name: "CORE_Survival", path: "core/CORE_Survival.js" },
+        { slot: "13", name: "CORE_Inventory", path: "core/CORE_Inventory.js" },
+        { slot: "14", name: "CORE_Restock", path: "core/CORE_Restock.js" },
+        { slot: "15", name: "CORE_Travel", path: "core/CORE_Travel.js" },
+        { slot: "16", name: "CORE_Benchmark", path: "core/CORE_Benchmark.js" },
+        { slot: "20", name: "WAR_Combat", path: "classes/WAR_Combat.js" },
+        { slot: "21", name: "PRI_Combat", path: "classes/PRI_Combat.js" },
+        { slot: "30", name: "DORG_Config", path: "characters/DORG_Config.js" },
+        { slot: "31", name: "DORG_Main", path: "characters/DORG_Main.js" },
+        { slot: "32", name: "PRORG_Config", path: "characters/PRORG_Config.js" },
+        { slot: "33", name: "PRORG_Main", path: "characters/PRORG_Main.js" },
+        { slot: "40", name: "UpdateCode", path: "tools/UpdateCode.js" }
     ];
 
     function log(msg, color) {
@@ -65,7 +61,6 @@
     }
 
     function rawUrl(path) {
-        // jsDelivr often works when raw.githubusercontent.com is blocked
         return "https://cdn.jsdelivr.net/gh/" + REPO + "@" + BRANCH + "/" + path;
     }
 
@@ -95,46 +90,108 @@
         try {
             return await fetchText(rawUrl(path));
         } catch (e1) {
-            log("jsDelivr failed, trying raw.githubusercontent.com ...", "#FFD080");
+            log("jsDelivr failed, trying raw GitHub...", "#FFD080");
             return await fetchText(rawUrlGithub(path));
         }
     }
 
-    function saveCode(slot, name, code) {
+    /**
+     * Fetch account code_list from the server.
+     * Returns a plain map: { "10": "CORE_Utils", ... }
+     */
+    function listCodes() {
         return new Promise(function (resolve, reject) {
             try {
                 if (!parent || typeof parent.api_call !== "function") {
-                    reject(new Error("parent.api_call unavailable — run this inside Adventure Land CODE"));
-                    return;
-                }
-                if (slot == null || slot === "") {
-                    reject(new Error("No slot number for " + name));
+                    reject(new Error("parent.api_call unavailable"));
                     return;
                 }
 
-                // Official API requires: slot (number), name, code
-                parent.api_call("save_code", {
-                    slot: slot,
-                    name: name,
-                    code: code
+                let settled = false;
+                function done(map) {
+                    if (settled) return;
+                    settled = true;
+                    resolve(map || {});
+                }
+
+                parent.api_call("list_codes", {
+                    callback: function (payload) {
+                        try {
+                            // Community scripts: callback receives [ { list: {...} } ]
+                            let list = null;
+                            if (Array.isArray(payload) && payload[0] && payload[0].list) {
+                                list = payload[0].list;
+                            } else if (payload && payload.list) {
+                                list = payload.list;
+                            } else if (payload && typeof payload === "object") {
+                                list = payload;
+                            }
+
+                            const map = {};
+                            if (list) {
+                                for (const key in list) {
+                                    if (!Object.prototype.hasOwnProperty.call(list, key)) continue;
+                                    const val = list[key];
+                                    // val is either "name" or ["name", version]
+                                    if (typeof val === "string") map[String(key)] = val;
+                                    else if (Array.isArray(val)) map[String(key)] = val[0];
+                                    else if (val && val.name) map[String(key)] = val.name;
+                                }
+                            }
+                            done(map);
+                        } catch (e) {
+                            reject(e);
+                        }
+                    }
                 });
 
-                log("save_code requested: " + name + " → slot " + slot);
-                setTimeout(function () { resolve(true); }, 600);
+                // Fallback if callback never fires
+                setTimeout(function () {
+                    if (settled) return;
+                    // Try reading any client-side cache
+                    try {
+                        if (parent.code_list) {
+                            const map = {};
+                            const list = parent.code_list;
+                            for (const key in list) {
+                                if (!Object.prototype.hasOwnProperty.call(list, key)) continue;
+                                const val = list[key];
+                                if (typeof val === "string") map[String(key)] = val;
+                                else if (Array.isArray(val)) map[String(key)] = val[0];
+                            }
+                            done(map);
+                            return;
+                        }
+                    } catch (e) { /* ignore */ }
+                    done({});
+                }, 2500);
             } catch (e) {
                 reject(e);
             }
         });
     }
 
-    function refreshCodeList() {
-        try {
-            if (parent && typeof parent.api_call === "function") {
-                parent.api_call("list_codes", {});
+    function saveCode(slot, name, code) {
+        return new Promise(function (resolve, reject) {
+            try {
+                if (!parent || typeof parent.api_call !== "function") {
+                    reject(new Error("parent.api_call unavailable"));
+                    return;
+                }
+
+                // Working community pattern: slot as STRING
+                parent.api_call("save_code", {
+                    name: name,
+                    slot: String(slot),
+                    code: code
+                });
+
+                // Give the server a moment; real confirmation is list_codes afterward
+                setTimeout(function () { resolve(true); }, 750);
+            } catch (e) {
+                reject(e);
             }
-        } catch (e) {
-            // optional
-        }
+        });
     }
 
     function findFiles(filterNames) {
@@ -144,12 +201,51 @@
         return FILES.filter(function (f) { return wanted[f.name]; });
     }
 
+    async function list() {
+        log("Requesting code list from server...");
+        const map = await listCodes();
+        const keys = Object.keys(map).sort(function (a, b) { return Number(a) - Number(b); });
+        if (!keys.length) {
+            log("CODE list empty or UI not refreshed yet.", "#FFD080");
+            log("Try: close CODE, reopen it, or chat /codes");
+            return map;
+        }
+        log("=== Account CODE slots (" + keys.length + ") ===");
+        for (let i = 0; i < keys.length; i++) {
+            log("  slot " + keys[i] + " = " + map[keys[i]]);
+        }
+        return map;
+    }
+
+    async function verify() {
+        const map = await listCodes();
+        let missing = 0;
+        for (let i = 0; i < FILES.length; i++) {
+            const f = FILES[i];
+            const actual = map[String(f.slot)];
+            if (actual === f.name) {
+                log("VERIFIED " + f.name + " @ slot " + f.slot, "#A0FFA0");
+            } else {
+                missing++;
+                log("MISSING  " + f.name + " @ slot " + f.slot + " (found: " + (actual || "empty") + ")", "#FF8080");
+            }
+        }
+        if (missing) {
+            log(missing + " missing. If slots >= 3 fail, you need Ancient Computer.", "#FFD080");
+            log("Or the Load dropdown is stale — close/reopen CODE, then await BOT_UPDATE.list()");
+        } else {
+            log("All bot CODE slots verified on server.", "#A0FFA0");
+        }
+        return { map: map, missing: missing };
+    }
+
     /**
-     * @param {string[]} [onlyNames] optional CODE names to update
+     * @param {string[]} [onlyNames]
      */
     async function run(onlyNames) {
         const list = findFiles(onlyNames);
         log("UpdateCode: syncing " + list.length + " file(s) from " + REPO + "@" + BRANCH);
+        log("Watch chat for official 'Saved name.slot.js' messages from the game.");
 
         let ok = 0;
         let fail = 0;
@@ -157,16 +253,11 @@
         for (let i = 0; i < list.length; i++) {
             const file = list[i];
             try {
-                log("Fetching " + file.name + " (slot " + file.slot + ") ...");
+                log("Fetching " + file.name + " → slot " + file.slot);
                 const code = await fetchCode(file.path);
-                if (!code || !String(code).trim()) {
-                    throw new Error("Empty response");
-                }
-                if (String(code).indexOf("404") === 0 && code.length < 40) {
-                    throw new Error("Looks like a 404 page");
-                }
+                if (!code || !String(code).trim()) throw new Error("Empty response");
                 await saveCode(file.slot, file.name, code);
-                log("OK " + file.name + "." + file.slot + ".js", "#A0FFA0");
+                log("save_code sent: " + file.name + "." + file.slot + ".js", "#A0FFA0");
                 ok++;
             } catch (e) {
                 log("FAILED " + file.name + ": " + safeError(e), "#FF8080");
@@ -174,19 +265,20 @@
             }
         }
 
-        refreshCodeList();
-        log("UpdateCode done — ok=" + ok + " fail=" + fail, fail ? "#FFD080" : "#A0FFA0");
-        log("Open CODE and look for slots 10–16, 20–21, 30–33, 40");
-        return { ok: ok, fail: fail };
+        log("Saves requested — ok_sent=" + ok + " fail=" + fail);
+        log("Verifying against server code_list...");
+        await new Promise(function (r) { setTimeout(r, 1000); });
+        const result = await verify();
+
+        log("If verified but Load dropdown empty: close CODE window and reopen.");
+        log("Or use chat: /loadcode DORG_Main");
+        return result;
     }
 
     function status() {
-        log("BOT_UPDATE ready. Call: await BOT_UPDATE.run()");
-        log("Slot map:");
-        for (let i = 0; i < FILES.length; i++) {
-            const f = FILES[i];
-            log("  " + f.slot + " = " + f.name);
-        }
+        log("await BOT_UPDATE.run()   — download + save + verify");
+        log("await BOT_UPDATE.list()  — print server CODE slots");
+        log("await BOT_UPDATE.verify()— check our slot map");
         return FILES;
     }
 
@@ -195,10 +287,12 @@
         BRANCH: BRANCH,
         FILES: FILES,
         run: run,
-        status: status,
-        rawUrl: rawUrl
+        list: list,
+        verify: verify,
+        status: status
     };
 
-    log("UpdateCode ready — run: await BOT_UPDATE.run()");
-    log("(Not just BOT_UPDATE — you need .run())");
+    log("UpdateCode ready");
+    log("1) await BOT_UPDATE.run()");
+    log("2) await BOT_UPDATE.list()");
 })();
