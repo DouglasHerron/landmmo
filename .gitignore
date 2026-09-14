@@ -1,0 +1,10 @@
+# Ignore local/editor noise; keep bot source tracked
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+!.env.example
+node_modules/
+.vscode/
+.idea/
