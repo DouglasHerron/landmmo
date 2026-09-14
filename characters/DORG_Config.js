@@ -49,10 +49,16 @@
                 desiredMpPotions: 500
             },
 
+            // Dorchant handles sell/bank — farmers dump when he's nearby
+            mule: {
+                name: "Dorchant",
+                dumpDistance: 320
+            },
+
             inventory: {
-                minimumFreeSlots: 5,
-                autoSell: true,
-                autoBank: true,
+                minimumFreeSlots: 8,
+                autoSell: false,
+                autoBank: false,
 
                 sellItems: [
                     "ringsj",

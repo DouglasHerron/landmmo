@@ -192,6 +192,150 @@
         return findSellSlot() !== -1;
     }
 
+    function muleCfg() {
+        return (BOT.config && BOT.config.mule) || {};
+    }
+
+    function muleName() {
+        return muleCfg().name || "";
+    }
+
+    function muleEnabled() {
+        return !!muleName();
+    }
+
+    function dumpDistance() {
+        const d = muleCfg().dumpDistance;
+        return typeof d === "number" ? d : 320;
+    }
+
+    function getMule() {
+        const name = muleName();
+        if (!name) return null;
+        try {
+            if (typeof get_player === "function") {
+                const p = get_player(name);
+                if (p) return p;
+            }
+        } catch (e) { /* ignore */ }
+        return null;
+    }
+
+    function muleInRange() {
+        const mule = getMule();
+        if (!mule) return null;
+        const dist = utils().distanceTo ? utils().distanceTo(mule) : Infinity;
+        if (dist > dumpDistance()) return null;
+        return mule;
+    }
+
+    /**
+     * Items farmers push to Dorchant: sell-whitelist junk, gifts, and
+     * non-protected loot when inventory is tight.
+     */
+    function shouldDump(item) {
+        if (!item) return false;
+        if (isProtected(item)) return false;
+        if (isLocked(item)) return false;
+        if (item.name === "anniversarygift") return true;
+
+        const cfg = invCfg();
+        const sellItems = cfg.sellItems || [];
+        if (sellItems.indexOf(item.name) !== -1 && (item.level || 0) === 0 && !hasStats(item)) {
+            return true;
+        }
+
+        // When low on space, dump anything not protected (mule sells/banks)
+        if (inventoryFullSoon()) return true;
+        return false;
+    }
+
+    function findDumpSlot() {
+        if (!character.items) return -1;
+        for (let i = 0; i < character.items.length; i++) {
+            if (shouldDump(character.items[i])) return i;
+        }
+        return -1;
+    }
+
+    function needsDump() {
+        if (!muleEnabled()) return false;
+        if (hasAnniversaryGift()) return true;
+        if (findDumpSlot() === -1) return false;
+        // Always dump sell-whitelist junk when present; dump other loot when tight
+        const cfg = invCfg();
+        const sellItems = cfg.sellItems || [];
+        if (character.items) {
+            for (let i = 0; i < character.items.length; i++) {
+                const it = character.items[i];
+                if (!it) continue;
+                if (sellItems.indexOf(it.name) !== -1 && (it.level || 0) === 0 && !isProtected(it) && !isLocked(it)) {
+                    return true;
+                }
+            }
+        }
+        return inventoryFullSoon();
+    }
+
+    let lastMuleRequestAt = 0;
+    const MULE_REQUEST_MS = 20000;
+
+    function requestMule() {
+        const name = muleName();
+        if (!name) return;
+        const t = now();
+        if (t - lastMuleRequestAt < MULE_REQUEST_MS) return;
+        lastMuleRequestAt = t;
+        try {
+            if (typeof send_cm === "function") {
+                send_cm(name, "need_dump");
+                if (utils().log) utils().log("Requested dump pickup from " + name);
+            }
+        } catch (e) {
+            if (utils().error) utils().error("send_cm: " + (utils().safeError ? utils().safeError(e) : e));
+        }
+    }
+
+    function dumpOneToMule() {
+        const mule = muleInRange();
+        if (!mule) return false;
+        const slot = findDumpSlot();
+        if (slot < 0) return false;
+        const item = character.items[slot];
+        if (!item) return false;
+
+        try {
+            if (typeof send_item === "function") {
+                send_item(mule.name, slot, item.q || 1);
+                if (utils().log) utils().log("Dumped " + item.name + " → " + mule.name);
+                return true;
+            }
+        } catch (e) {
+            if (utils().error) utils().error("send_item: " + (utils().safeError ? utils().safeError(e) : e));
+        }
+        return false;
+    }
+
+    /**
+     * Farmer mule path: dump to Dorchant when nearby; never leave farm if mule is set.
+     * @returns {boolean|null} true = busy dumping, false = nothing to do, null = fall through to town
+     */
+    function handleMuleDump() {
+        if (!muleEnabled()) return null;
+        if (BOT.role === "merchant") return null;
+
+        if (!needsDump()) return false;
+
+        if (muleInRange()) {
+            dumpOneToMule();
+            return true;
+        }
+
+        // Wait for mule — request pickup, stay on farm (no town trip)
+        requestMule();
+        return false;
+    }
+
     function hasAnniversaryGift() {
         if (!character.items) return false;
         for (let i = 0; i < character.items.length; i++) {
@@ -207,7 +351,6 @@
         const cfg = invCfg();
         if (cfg.autoSell !== false && hasJunkToSell()) return true;
         if (cfg.autoBank !== false && findBankSlot() !== -1) return true;
-        // Full but nothing actionable — do not leave the farm
         return false;
     }
 
@@ -298,6 +441,12 @@
             }
 
             if (state === "idle") {
+                // Farmers with a mule: dump to Dorchant, skip town sell/bank
+                const muleResult = handleMuleDump();
+                if (muleResult === true) return true;
+                if (muleResult === false) return false;
+                // muleResult === null → no mule configured, use town cleanup
+
                 if (!needsCleanup()) return false;
 
                 // Sell only when low on space AND whitelist junk exists

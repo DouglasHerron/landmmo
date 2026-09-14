@@ -14,7 +14,11 @@
     let lastScoutAt = 0;
     let lastBuyAt = 0;
     let scoutAnnounceAt = 0;
-    let scoutTravelDone = false; // must leave home once before accepting "neverSeen" snapshot
+    let scoutTravelDone = false;
+    let pickupRequestedAt = 0;
+    let pickupFrom = "";
+    let lastPickupRoundAt = 0;
+    let lingerUntil = 0;
 
     /** @type {Object.<string, { gear: Object.<string, number>, at: number, seen: boolean }>} */
     let partyStatus = {};
@@ -547,12 +551,93 @@
         else if (typeof home.x === "number") await smartTo(home);
     }
 
+    function muleCfg() {
+        return (BOT.config && BOT.config.mule) || {};
+    }
+
     function scoutMeet() {
         const s = scoutCfg();
         if (s.meet) return s.meet;
         if (BOT.config && BOT.config.farm && BOT.config.farm.monster) return BOT.config.farm.monster;
         return "crab";
     }
+
+    function pickupIntervalMs() {
+        const mins = muleCfg().pickupEveryMinutes;
+        return (typeof mins === "number" ? mins : 3) * 60 * 1000;
+    }
+
+    function lingerMs() {
+        const sec = muleCfg().lingerSeconds;
+        return (typeof sec === "number" ? sec : 20) * 1000;
+    }
+
+    function needsPickupRound() {
+        if (pickupRequestedAt && (now() - pickupRequestedAt) < 120000) return true;
+        return (now() - lastPickupRoundAt) >= pickupIntervalMs();
+    }
+
+    function onCm(name, data) {
+        const msg = typeof data === "string" ? data : (data && data.type) || "";
+        if (msg !== "need_dump") return;
+        if (clients().indexOf(name) === -1) return;
+        pickupRequestedAt = now();
+        pickupFrom = name;
+        if (utils().log) utils().log("Pickup requested by " + name);
+    }
+
+    /**
+     * Go to farm, linger so farmers can send_item, then leave for sell/bank/home.
+     */
+    async function handlePickup() {
+        if (!needsPickupRound() && now() >= lingerUntil) return false;
+        if (isPathing()) return true;
+
+        const meet = scoutMeet();
+        const visible = clientsInRange();
+        const atFarm = farmNearby(meet);
+
+        // Still lingering beside farmers
+        if (now() < lingerUntil) {
+            if (utils().log && now() - scoutAnnounceAt > 10000) {
+                scoutAnnounceAt = now();
+                utils().log("Dorchant collecting dumps (" + Math.ceil((lingerUntil - now()) / 1000) + "s)");
+            }
+            return true;
+        }
+
+        if (visible === 0 && !atFarm) {
+            if (now() - scoutAnnounceAt > 15000) {
+                scoutAnnounceAt = now();
+                if (utils().log) {
+                    utils().log("Dorchant → " + meet + " (collect farmer loot" +
+                        (pickupFrom ? " / " + pickupFrom : "") + ")");
+                }
+            }
+            await smartTo(meet);
+            return true;
+        }
+
+        // Arrived — linger for send_item, also refresh gear scan
+        inspectNearbyClients();
+        lingerUntil = now() + lingerMs();
+        lastPickupRoundAt = now();
+        pickupRequestedAt = 0;
+        pickupFrom = "";
+        if (utils().log) utils().log("Dorchant at farm — waiting for dumps");
+        return true;
+    }
+
+    // Wire CM (preserve any prior handler)
+    try {
+        const prevCm = globalThis.on_cm;
+        globalThis.on_cm = function (name, data) {
+            try { onCm(name, data); } catch (e) { /* ignore */ }
+            if (typeof prevCm === "function" && prevCm !== globalThis.on_cm) {
+                try { prevCm(name, data); } catch (e2) { /* ignore */ }
+            }
+        };
+    } catch (e) { /* ignore */ }
 
     function scoutIntervalMs() {
         const mins = scoutCfg().everyMinutes;
@@ -783,16 +868,19 @@
     async function handle() {
         if (typeof character === "undefined" || !character) return false;
 
-        // 1) Know party gear before buying/upgrading
+        // 1) Collect farmer dumps (urgent CM or periodic)
+        if (await handlePickup()) return true;
+
+        // 2) Know party gear before buying/upgrading
         if (await handleScout()) return true;
 
-        // 2) Buy missing base gear (gap only)
+        // 3) Buy missing base gear (gap only, needs gold)
         if (await handleBuyGear()) return true;
 
-        // 3) Upgrade / compound toward gaps only
+        // 4) Upgrade / compound toward gaps only
         if (await handleUpgrade()) return true;
 
-        // 4) Idle at bank
+        // 5) Idle at bank
         if (atHome()) return false;
         if (isPathing()) return true;
         await travelHome();
@@ -811,7 +899,8 @@
         gearReport: gearReport,
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
-        _botVersion: "MER_Logistics_v5"
+        onCm: onCm,
+        _botVersion: "MER_Logistics_v6"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");

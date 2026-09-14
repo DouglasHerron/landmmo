@@ -179,8 +179,9 @@ Selling only happens after travel to a vendor — never from the farm.
 3. Dorchant accepts Dorg’s invite and stays near the **bank** (`config.home`).
 4. Can sell whitelist junk / bank loot / restock pots, then return to bank (not the farm).
 5. **Gear progression:** scouts the farm, reads party slots, then buys/upgrades/compounds **only gaps** vs `upgrade.targets`. Console: `BOT.logistics.gearReport()`.
+6. **Farmer inventory:** visits crabs every ~3 min (or on `need_dump` CM). Farmers `send_item` junk/loot to Dorchant; he sells/banks. Farmers stay on the farm (`autoSell`/`autoBank` off).
 
-Next mule phases (not done yet): pickup dumps from farmers, deliver finished gear/pots.
+Next mule phases (not done yet): deliver finished gear/pots.
 
 ---
 

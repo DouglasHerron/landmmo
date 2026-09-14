@@ -51,11 +51,19 @@
                 desiredMpPotions: 700
             },
 
+            mule: {
+                name: "Dorchant",
+                dumpDistance: 320
+            },
+
             inventory: {
-                minimumFreeSlots: 5,
+                minimumFreeSlots: 8,
                 autoSell: false,
-                autoBank: true,
-                sellItems: [],
+                autoBank: false,
+                sellItems: [
+                    "ringsj",
+                    "hpbelt"
+                ],
                 protectedItems: [
                     "hpot0",
                     "hpot1",
