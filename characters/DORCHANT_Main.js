@@ -27,7 +27,29 @@
         } catch (e) { /* ignore */ }
     }
 
-    root.BOT_STATUS = { main: "DORCHANT_Main", phase: "starting" };
+    /** AL CODE console often can't see runner locals — publish everywhere. */
+    function publishStatus(status) {
+        try { if (typeof globalThis !== "undefined") globalThis.BOT_STATUS = status; } catch (e0) { /* ignore */ }
+        try { if (typeof window !== "undefined") window.BOT_STATUS = status; } catch (e1) { /* ignore */ }
+        try { if (root) root.BOT_STATUS = status; } catch (e2) { /* ignore */ }
+        try {
+            if (typeof parent !== "undefined" && parent && parent !== root) {
+                parent.BOT_STATUS = status;
+            }
+        } catch (e3) { /* ignore */ }
+        try {
+            if (root.BOT) {
+                root.BOT.status = status;
+                root.BOT.getStatus = function () {
+                    log(JSON.stringify(status));
+                    return status;
+                };
+            }
+        } catch (e4) { /* ignore */ }
+        return status;
+    }
+
+    publishStatus({ main: "DORCHANT_Main", phase: "starting" });
     log("DORCHANT_Main starting...");
     try {
         if (typeof set_message === "function") set_message("DORCHANT boot");
@@ -50,14 +72,8 @@
                 }
             } catch (e) { /* ignore */ }
         }
-        try {
-            var probe = setTimeout(function () {}, 0);
-            for (var id = 1; id <= probe; id++) {
-                try { clearInterval(id); } catch (e1) { /* ignore */ }
-                try { clearTimeout(id); } catch (e2) { /* ignore */ }
-            }
-        } catch (e) { /* ignore */ }
-        log("Cleared leftover timers");
+        // Only clear our known bot intervals — do NOT nuke all timer IDs
+        log("Cleared leftover bot timers");
     }
 
     function loadModule(slot, label) {
@@ -77,9 +93,13 @@
 
         loadModule(34, "DORCHANT_Config");
 
+        // Prefer existing BOT from Config (globalThis); keep window in sync
+        try {
+            if (typeof globalThis !== "undefined" && globalThis.BOT) root.BOT = globalThis.BOT;
+        } catch (e) { /* ignore */ }
         root.BOT = root.BOT || { role: "merchant", config: { name: "Dorchant" } };
+        try { if (typeof globalThis !== "undefined") globalThis.BOT = root.BOT; } catch (e2) { /* ignore */ }
 
-        // No CORE_Travel / combat — merchant stays off the farm
         var modules = [
             { slot: 10, name: "CORE_Utils" },
             { slot: 11, name: "CORE_Party" },
@@ -95,51 +115,71 @@
             loadModule(modules[m].slot, modules[m].name);
         }
 
+        // Re-sync BOT after modules (they attach to globalThis.BOT)
+        try {
+            if (typeof globalThis !== "undefined" && globalThis.BOT) root.BOT = globalThis.BOT;
+        } catch (e3) { /* ignore */ }
+
         root.BOT.party = root.BOT.party || { handle: function () { return false; } };
         root.BOT.survival = root.BOT.survival || { handle: function () { return false; } };
         root.BOT.inventory = root.BOT.inventory || { handle: function () { return false; } };
         root.BOT.restock = root.BOT.restock || { handle: function () { return false; } };
         root.BOT.logistics = root.BOT.logistics || { handle: function () { return false; } };
         root.BOT.benchmark = root.BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
-        root.BOT.townNav = root.BOT.townNav || null;
-
         if (!root.BOT.townNav) {
-            log("CORE_TownNav MISSING — sync slot 17 (CORE_TownNav) then reload DORCHANT_Main", "#FF8080");
+            log("CORE_TownNav MISSING — sync slot 17 then reload", "#FF8080");
         }
 
-        // Reset inventory state machine so a stuck sell/return can't pin Dorchant
         if (root.BOT.inventory && root.BOT.inventory.reset) root.BOT.inventory.reset();
         if (root.BOT.restock && root.BOT.restock.reset) root.BOT.restock.reset();
 
-        root.BOT_STATUS = {
-            main: "DORCHANT_Main",
-            phase: "running",
-            party: (root.BOT.party && root.BOT.party._botVersion) || "MISSING",
-            logistics: (root.BOT.logistics && root.BOT.logistics._botVersion) || "MISSING",
-            townNav: (root.BOT.townNav && root.BOT.townNav._botVersion) || "MISSING",
-            home: (root.BOT.config && root.BOT.config.home && root.BOT.config.home.to) || "?"
-        };
-        log("BOT_STATUS = " + JSON.stringify(root.BOT_STATUS));
+        function buildStatus(phase) {
+            return {
+                main: "DORCHANT_Main",
+                phase: phase || "running",
+                party: (root.BOT.party && root.BOT.party._botVersion) || "MISSING",
+                logistics: (root.BOT.logistics && root.BOT.logistics._botVersion) || "MISSING",
+                townNav: (root.BOT.townNav && root.BOT.townNav._botVersion) || "MISSING",
+                inventory: (root.BOT.inventory && root.BOT.inventory.getState)
+                    ? root.BOT.inventory.getState()
+                    : "?",
+                home: (root.BOT.config && root.BOT.config.home && root.BOT.config.home.to) || "?",
+                map: (typeof character !== "undefined" && character && character.map) || "?"
+            };
+        }
+
+        publishStatus(buildStatus("running"));
+        log("BOT_STATUS = " + JSON.stringify(publishStatus(buildStatus("running"))));
         try {
-            if (typeof set_message === "function") set_message("DORCHANT " + root.BOT_STATUS.logistics);
+            if (typeof set_message === "function") {
+                set_message("DORCHANT " + ((root.BOT.townNav && root.BOT.townNav._botVersion) || "no-nav"));
+            }
         } catch (e) { /* ignore */ }
 
         var busy = false;
         var TICK_MS = 250;
+        var lastStatusAt = 0;
 
         async function mainTick() {
             if (busy) return;
             busy = true;
             try {
+                // Keep status visible to CODE console
+                var t = Date.now();
+                if (t - lastStatusAt > 5000) {
+                    lastStatusAt = t;
+                    publishStatus(buildStatus("running"));
+                }
+
                 if (root.BOT.party && root.BOT.party.handle) root.BOT.party.handle();
                 if (root.BOT.survival && root.BOT.survival.handle && root.BOT.survival.handle()) return;
-                // Sell/bank junk first, then upgrade wishlist gear, then pot restock / home
                 if (root.BOT.inventory && root.BOT.inventory.handle && await root.BOT.inventory.handle()) return;
                 if (root.BOT.logistics && root.BOT.logistics.handle && await root.BOT.logistics.handle()) return;
                 if (root.BOT.restock && root.BOT.restock.handle && await root.BOT.restock.handle()) return;
                 if (root.BOT.benchmark && root.BOT.benchmark.handle) root.BOT.benchmark.handle();
             } catch (error) {
                 log("DORCHANT main error: " + safeError(error), "#FF8080");
+                publishStatus({ main: "DORCHANT_Main", phase: "error", error: safeError(error) });
             } finally {
                 busy = false;
             }
@@ -149,9 +189,9 @@
             mainTick();
         }, TICK_MS);
 
-        log("DORCHANT_Main running. In CODE console type: BOT_STATUS");
+        log("DORCHANT_Main running. Try: BOT.getStatus()  or  BOT.status");
     } catch (error) {
-        root.BOT_STATUS = { main: "DORCHANT_Main", phase: "CRASHED", error: safeError(error) };
+        publishStatus({ main: "DORCHANT_Main", phase: "CRASHED", error: safeError(error) });
         log("DORCHANT_Main CRASHED: " + safeError(error), "#FF8080");
     }
 })();
