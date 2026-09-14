@@ -12,8 +12,8 @@
     let state = "idle"; // idle | traveling_sell | selling | traveling_bank | banking | returning
     let lastActionAt = 0;
     let stateStartedAt = 0;
-    const TRAVEL_RETRY_MS = 20000;
-    const STATE_TIMEOUT_MS = 90000;
+    const TRAVEL_RETRY_MS = 12000;
+    const STATE_TIMEOUT_MS = 120000;
 
     function utils() {
         return BOT.utils || {};
@@ -401,13 +401,74 @@
         lastActionAt = stateStartedAt;
     }
 
-    function startMove(dest, label) {
-        if (isPathing()) return;
-        if (now() - lastActionAt < TRAVEL_RETRY_MS && lastActionAt > 0) return;
-        lastActionAt = now();
-        if (utils().log) utils().log(label || ("Moving to " + (dest && dest.to ? dest.to : dest)));
+    let lastMoveX = 0;
+    let lastMoveY = 0;
+    let lastMoveCheckAt = 0;
+
+    function isMoveStuck() {
         try {
-            if (typeof smart_move === "function") smart_move(dest);
+            if (!isPathing()) return false;
+            const t = now();
+            if (t - lastMoveCheckAt < 8000) return false;
+            const dx = (character.x || 0) - lastMoveX;
+            const dy = (character.y || 0) - lastMoveY;
+            lastMoveCheckAt = t;
+            lastMoveX = character.x;
+            lastMoveY = character.y;
+            return Math.sqrt(dx * dx + dy * dy) < 15;
+        } catch (e) {
+            return true;
+        }
+    }
+
+    /** Enter bank door when close enough (smart_move sometimes stops outside). */
+    function tryTransportBank() {
+        if (character.map === "bank") return true;
+        if (typeof transport !== "function") return false;
+        try {
+            const doors = (typeof G !== "undefined" && G.maps && G.maps[character.map] && G.maps[character.map].doors) || [];
+            for (let i = 0; i < doors.length; i++) {
+                const d = doors[i];
+                if (!d || d[4] !== "bank") continue;
+                const dx = character.x - d[0];
+                const dy = character.y - d[1];
+                if (Math.sqrt(dx * dx + dy * dy) < 60) {
+                    transport("bank", d[5] || 0);
+                    if (utils().log) utils().log("transport → bank");
+                    return true;
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
+    function normalizeDest(dest) {
+        if (!dest) return dest;
+        if (typeof dest === "string") return dest;
+        if (dest.to) return dest.to; // "bank" / "main" — string form is more reliable
+        return dest;
+    }
+
+    function startMove(dest, label, force) {
+        const stuck = isMoveStuck();
+        if (!force && !stuck && isPathing()) return;
+        if (!force && !stuck && now() - lastActionAt < TRAVEL_RETRY_MS && lastActionAt > 0) return;
+
+        lastActionAt = now();
+        lastMoveX = character.x;
+        lastMoveY = character.y;
+        lastMoveCheckAt = lastActionAt;
+
+        if (utils().log) utils().log(label || ("Moving to " + (dest && dest.to ? dest.to : dest)));
+
+        // Bank: try door transport if already at entrance
+        const norm = normalizeDest(dest);
+        if (norm === "bank") {
+            if (tryTransportBank()) return;
+        }
+
+        try {
+            if (typeof smart_move === "function") smart_move(norm);
         } catch (e) {
             if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
         }
@@ -462,8 +523,13 @@
 
     function abortToFarm(reason) {
         if (utils().warn) utils().warn("Inventory abort: " + reason);
+        // Merchant: just clear state — don't start another doomed path
+        if (BOT.role === "merchant" || (BOT.config && BOT.config.home)) {
+            setState("idle");
+            return;
+        }
         setState("returning");
-        startMove(returnDest(), "Returning to: " + ((returnDest() && returnDest().to) || returnDest() || "?"));
+        startMove(returnDest(), "Returning to: " + ((returnDest() && returnDest().to) || returnDest() || "?"), true);
     }
 
     /**
@@ -493,13 +559,19 @@
                 // Sell only when low on space AND whitelist junk exists
                 if (cfg.autoSell !== false && inventoryFullSoon() && hasJunkToSell()) {
                     setState("traveling_sell");
-                    startMove({ to: "main" }, "Traveling to merchant to sell junk");
+                    startMove("main", "Traveling to merchant to sell junk", true);
                     return true;
                 }
 
                 if (cfg.autoBank !== false && (hasAnniversaryGift() || (inventoryFullSoon() && findBankSlot() !== -1))) {
+                    // Prefer sell pass first when junk is present (gold for Dorchant)
+                    if (cfg.autoSell !== false && hasJunkToSell()) {
+                        setState("traveling_sell");
+                        startMove("main", "Traveling to merchant to sell junk", true);
+                        return true;
+                    }
                     setState("traveling_bank");
-                    startMove({ to: "bank" }, "Traveling to bank");
+                    startMove("bank", "Traveling to bank", true);
                     return true;
                 }
 
@@ -513,14 +585,16 @@
                     return true;
                 }
                 if (!nearMerchant()) {
-                    startMove({ to: "main" }, "Traveling to merchant to sell junk");
+                    startMove("main", "Traveling to merchant to sell junk", isMoveStuck());
                     return true;
                 }
                 setState("selling");
                 sellJunk();
                 if (inventoryFullSoon() && cfg.autoBank !== false && findBankSlot() !== -1) {
                     setState("traveling_bank");
-                    startMove({ to: "bank" }, "Traveling to bank");
+                    startMove("bank", "Traveling to bank", true);
+                } else if (BOT.role === "merchant" || (BOT.config && BOT.config.home && BOT.config.home.to === "bank")) {
+                    setState("idle");
                 } else {
                     setState("returning");
                     startMove(returnDest(), "Returning to farm");
@@ -533,12 +607,22 @@
                     abortToFarm("bank no longer needed");
                     return true;
                 }
+                // Sell junk first if we're already in town — then bank
+                if (hasJunkToSell() && nearMerchant()) {
+                    sellJunk();
+                }
                 if (!nearBank()) {
-                    startMove({ to: "bank" }, "Traveling to bank");
+                    tryTransportBank();
+                    startMove("bank", "Traveling to bank", isMoveStuck());
                     return true;
                 }
                 setState("banking");
                 bankItems();
+                // Merchant home is bank — don't re-path; just idle
+                if (BOT.role === "merchant" || (BOT.config && BOT.config.home && BOT.config.home.to === "bank")) {
+                    setState("idle");
+                    return false;
+                }
                 setState("returning");
                 startMove(returnDest(), "Returning to farm");
                 return true;

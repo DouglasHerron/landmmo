@@ -571,7 +571,16 @@
     async function travelHome() {
         const home = homeCfg();
         if (utils().log) utils().log("Dorchant → home (" + (home.to || "coords") + ")");
-        if (home.to) await smartTo({ to: home.to });
+        if (home.to === "bank") {
+            // Same path as inventory — string dest + door transport
+            try {
+                if (character.map !== "bank" && typeof smart_move === "function") {
+                    smart_move("bank");
+                }
+            } catch (e) { /* ignore */ }
+            return;
+        }
+        if (home.to) await smartTo(home.to);
         else if (typeof home.x === "number") await smartTo(home);
     }
 
