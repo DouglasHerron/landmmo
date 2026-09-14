@@ -2,6 +2,9 @@
  * CORE_Travel.js
  * Travel toward configured farm when monster is not nearby.
  * Attaches to: BOT.travel
+ *
+ * IMPORTANT: Only return true (block combat) while actively pathing.
+ * Returning true on cooldown was leaving Dorg idle forever.
  */
 (function () {
     "use strict";
@@ -11,7 +14,7 @@
     let traveling = false;
     let lastTravelAt = 0;
     const TRAVEL_COOLDOWN_MS = 15000;
-    const NEARBY_RANGE = 400;
+    const NEARBY_RANGE = 600;
 
     function utils() {
         return BOT.utils || {};
@@ -23,7 +26,6 @@
 
     function farmTarget() {
         const cfg = farmCfg();
-        // Prefer exact coordinates when provided
         if (typeof cfg.x === "number" && typeof cfg.y === "number") {
             return {
                 x: cfg.x,
@@ -35,15 +37,33 @@
     }
 
     function monsterNearby(mtype) {
-        if (!mtype || typeof get_nearest_monster !== "function") return false;
+        if (!mtype) return false;
+
         try {
-            const mon = get_nearest_monster({ type: mtype });
-            if (!mon) return false;
-            const dist = utils().distanceTo ? utils().distanceTo(mon) : Infinity;
-            return dist < NEARBY_RANGE;
-        } catch (e) {
-            return false;
-        }
+            if (typeof get_nearest_monster === "function") {
+                const mon = get_nearest_monster({ type: mtype });
+                if (mon && mon.mtype === mtype) {
+                    const dist = utils().distanceTo ? utils().distanceTo(mon) : 0;
+                    if (dist < NEARBY_RANGE) return true;
+                }
+            }
+        } catch (e) { /* ignore */ }
+
+        // Entity scan fallback
+        try {
+            if (parent && parent.entities) {
+                for (const id in parent.entities) {
+                    const e = parent.entities[id];
+                    if (!e || e.type !== "monster" || e.dead) continue;
+                    if (e.mtype !== mtype) continue;
+                    if (mtype === "crab" && e.mtype === "crabx") continue;
+                    const dist = utils().distanceTo ? utils().distanceTo(e) : Infinity;
+                    if (dist < NEARBY_RANGE) return true;
+                }
+            }
+        } catch (e) { /* ignore */ }
+
+        return false;
     }
 
     function atCoordinates(dest) {
@@ -54,39 +74,35 @@
         return Math.sqrt(dx * dx + dy * dy) < 80;
     }
 
+    function isPathing() {
+        if (traveling) return true;
+        try {
+            if (typeof is_moving === "function" && is_moving(character)) return true;
+        } catch (e) { /* ignore */ }
+        try {
+            if (typeof smart !== "undefined" && smart && smart.moving) return true;
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
     function needsTravel() {
-        const cfg = farmCfg();
         const dest = farmTarget();
         if (!dest) return false;
 
-        // Coordinate-based farm
         if (typeof dest === "object" && typeof dest.x === "number") {
             return !atCoordinates(dest);
         }
 
-        // Monster-type farm (never treat crabx as crab)
-        const mtype = String(dest);
-        if (mtype === "crab") {
-            // Ensure we are near normal crabs, not only huge crab
-            return !monsterNearby("crab");
-        }
-        return !monsterNearby(mtype);
+        return !monsterNearby(String(dest));
     }
 
     async function goToFarm() {
         const dest = farmTarget();
-        if (!dest) return;
+        if (!dest) return false;
 
         const now = (utils().now && utils().now()) || Date.now();
-        if (traveling) return;
-        if (now - lastTravelAt < TRAVEL_COOLDOWN_MS) return;
-
-        // Don't stack smart_move while already pathing
-        try {
-            if (typeof is_moving === "function" && is_moving(character)) return;
-        } catch (e) {
-            // ignore
-        }
+        if (isPathing()) return true;
+        if (now - lastTravelAt < TRAVEL_COOLDOWN_MS) return false;
 
         traveling = true;
         lastTravelAt = now;
@@ -96,6 +112,7 @@
                 const label = typeof dest === "object" ? (dest.map || "") + " " + dest.x + "," + dest.y : dest;
                 utils().log("Traveling to farm: " + label);
             }
+            if (typeof set_message === "function") set_message("TRAVEL");
 
             if (typeof smart_move === "function") {
                 if (typeof dest === "object" && typeof dest.x === "number") {
@@ -109,23 +126,27 @@
         } finally {
             traveling = false;
         }
+        return false;
     }
 
     /**
-     * @returns {boolean} true when travel should override combat this tick
+     * @returns {boolean} true ONLY while actively pathing (blocks combat)
      */
     async function handle() {
-        if (typeof character === "undefined" || !character) return false;
-        if (character.rip) return false;
+        if (!character || character.rip) return false;
 
-        // Followers with no farm config skip travel (priest follows leader in combat)
         const cfg = farmCfg();
         if (!cfg.monster && typeof cfg.x !== "number") return false;
 
         try {
             if (!needsTravel()) return false;
-            await goToFarm();
-            return true;
+
+            // Already moving — block combat until arrival
+            if (isPathing()) return true;
+
+            // Start a new trip (may no-op on cooldown → do NOT block combat)
+            const startedOrPathing = await goToFarm();
+            return !!startedOrPathing || isPathing();
         } catch (e) {
             traveling = false;
             if (utils().error) utils().error("CORE_Travel handle: " + (utils().safeError ? utils().safeError(e) : e));
@@ -137,7 +158,7 @@
         handle: handle,
         needsTravel: needsTravel,
         farmTarget: farmTarget,
-        isTraveling: function () { return traveling; }
+        isTraveling: function () { return isPathing(); }
     };
 
     if (utils().log) utils().log("CORE_Travel loaded");
