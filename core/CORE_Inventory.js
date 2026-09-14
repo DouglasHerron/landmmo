@@ -149,9 +149,18 @@
     }
 
     let sellCooldownUntil = 0;
+    let missingJunkTicks = 0;
 
     function setSellCooldown(ms) {
         sellCooldownUntil = now() + (ms || 8000);
+    }
+
+    function itemsReady() {
+        try {
+            return !!(character && character.items && character.items.length);
+        } catch (e) {
+            return false;
+        }
     }
 
     function nearBank() {
@@ -548,6 +557,13 @@
         startMove(returnDest(), "Returning to: " + ((returnDest() && returnDest().to) || returnDest() || "?"), true);
     }
 
+    function finishSellTrip(reason) {
+        missingJunkTicks = 0;
+        setSellCooldown(20000);
+        setState("idle");
+        if (utils().log) utils().log("Sell trip end: " + reason);
+    }
+
     /**
      * @returns {boolean} true when inventory work should override combat
      */
@@ -559,8 +575,9 @@
 
         try {
             if (state !== "idle" && t - stateStartedAt > STATE_TIMEOUT_MS) {
-                if (state === "traveling_sell") setSellCooldown(15000);
+                if (state === "traveling_sell") setSellCooldown(30000);
                 abortInventory("timeout in " + state);
+                return false; // do not fall through into idle→sell same tick
             }
 
             if (state === "idle") {
@@ -568,8 +585,9 @@
                 if (muleResult === true) return true;
                 if (muleResult === false) return false;
 
-                // Merchant sells junk whenever present (not only when full)
+                // Merchant sells junk whenever present (cooldown stops abort loops)
                 if (isMerchant() && cfg.autoSell !== false && hasJunkToSell() && t >= sellCooldownUntil) {
+                    missingJunkTicks = 0;
                     setState("traveling_sell");
                     startMove("main", "Traveling to merchant to sell junk", true);
                     return true;
@@ -578,6 +596,7 @@
                 if (!needsCleanup()) return false;
 
                 if (cfg.autoSell !== false && inventoryFullSoon() && hasJunkToSell() && t >= sellCooldownUntil) {
+                    missingJunkTicks = 0;
                     setState("traveling_sell");
                     startMove("main", "Traveling to merchant to sell junk", true);
                     return true;
@@ -585,6 +604,7 @@
 
                 if (cfg.autoBank !== false && (hasAnniversaryGift() || (inventoryFullSoon() && findBankSlot() !== -1))) {
                     if (cfg.autoSell !== false && hasJunkToSell() && t >= sellCooldownUntil) {
+                        missingJunkTicks = 0;
                         setState("traveling_sell");
                         startMove("main", "Traveling to merchant to sell junk", true);
                         return true;
@@ -598,43 +618,51 @@
             }
 
             if (state === "traveling_sell") {
-                // Only stop when junk is gone — do NOT abort when inventory is no longer "full"
-                if (!hasJunkToSell()) {
-                    setSellCooldown(8000);
-                    abortInventory("nothing left to sell");
-                    return true;
+                // Mid map-change inventory can look empty — do NOT abort yet
+                if (!itemsReady()) return true;
+
+                if (hasJunkToSell()) {
+                    missingJunkTicks = 0;
+                } else {
+                    missingJunkTicks++;
+                    // Need ~4s of confirmed empty inventory before ending trip
+                    if (missingJunkTicks < 16) return true;
+                    finishSellTrip("nothing left to sell");
+                    return false;
                 }
+
                 if (!nearMerchant()) {
                     startMove("main", "Traveling to merchant to sell junk", isMoveStuck());
                     return true;
                 }
-                setState("selling");
+
                 const sold = sellJunk();
-                if (sold === 0 && hasJunkToSell()) {
-                    setSellCooldown(12000);
-                    if (utils().warn) utils().warn("Sell failed near vendor — cooling down");
-                    setState("idle");
-                    return false;
+                if (hasJunkToSell()) {
+                    if (sold === 0) {
+                        // At vendor but couldn't sell — cool down hard
+                        finishSellTrip("vendor sell failed");
+                        return false;
+                    }
+                    return true; // keep selling next tick
                 }
+
                 if (inventoryFullSoon() && cfg.autoBank !== false && findBankSlot() !== -1) {
+                    missingJunkTicks = 0;
                     setState("traveling_bank");
                     startMove("bank", "Traveling to bank", true);
-                } else if (isMerchant()) {
-                    setSellCooldown(5000);
-                    setState("idle");
-                } else {
-                    setState("returning");
-                    startMove(returnDest(), "Returning to farm");
+                    return true;
                 }
-                return true;
+
+                finishSellTrip("sold all junk");
+                return false;
             }
 
             if (state === "traveling_bank") {
                 if (!hasAnniversaryGift() && !inventoryFullSoon() && findBankSlot() === -1) {
                     abortInventory("bank no longer needed");
-                    return true;
+                    return false;
                 }
-                if (hasJunkToSell() && nearMerchant()) {
+                if (hasJunkToSell() && nearMerchant() && t >= sellCooldownUntil) {
                     sellJunk();
                 }
                 if (!nearBank()) {
@@ -668,6 +696,7 @@
             }
         } catch (e) {
             state = "idle";
+            setSellCooldown(15000);
             if (utils().error) utils().error("CORE_Inventory: " + (utils().safeError ? utils().safeError(e) : e));
         }
 
@@ -685,7 +714,12 @@
         bankItems: bankItems,
         handle: handle,
         getState: function () { return state; },
-        reset: function () { state = "idle"; stateStartedAt = 0; }
+        reset: function () {
+            state = "idle";
+            stateStartedAt = 0;
+            sellCooldownUntil = 0;
+            missingJunkTicks = 0;
+        }
     };
 
     if (utils().log) utils().log("CORE_Inventory loaded");
