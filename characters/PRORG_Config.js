@@ -14,7 +14,9 @@
 
             party: {
                 leader: "Dorg",
-                members: ["Dorg"]
+                members: ["Dorg"],
+                // Dorg invites — do not spam send_party_request
+                requestFallback: false
             },
 
             survival: {
