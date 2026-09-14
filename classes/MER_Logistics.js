@@ -1050,8 +1050,8 @@
         usefulMaxLevel: usefulMaxLevel,
         onCm: onCm,
         npcSells: npcSells,
-        _botVersion: "MER_Logistics_v12"
+        _botVersion: "MER_Logistics_v13"
     };
 
-    if (utils().log) utils().log("MER_Logistics loaded");
+    if (utils().log) utils().log("MER_Logistics loaded (v13)");
 })();

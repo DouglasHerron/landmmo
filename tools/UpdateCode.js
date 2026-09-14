@@ -21,6 +21,9 @@
     const REPO = "DouglasHerron/landmmo";
     const BRANCH = "main";
 
+    /** Resolved once per run() so jsDelivr cannot serve a stale @main blob. */
+    let resolvedSha = "";
+
     /**
      * Fixed slot map (slot sent as STRING — matches working community scripts).
      * Change if these collide with your existing CODE.
@@ -64,14 +67,17 @@
         }
     }
 
-    function rawUrl(path) {
-        // Cache-bust so syncs aren't stuck on stale jsDelivr/CDN copies
+    function rawUrl(path, sha) {
+        const ref = sha || BRANCH;
+        // Cache-bust query helps raw.githubusercontent.com; SHA makes it exact
         const bust = "t=" + Date.now();
-        return "https://raw.githubusercontent.com/" + REPO + "/" + BRANCH + "/" + path + "?" + bust;
+        return "https://raw.githubusercontent.com/" + REPO + "/" + ref + "/" + path + "?" + bust;
     }
 
-    function rawUrlJsdelivr(path) {
-        return "https://cdn.jsdelivr.net/gh/" + REPO + "@" + BRANCH + "/" + path;
+    function rawUrlJsdelivr(path, sha) {
+        // NEVER use @main alone — CDN caches branch tips for a long time
+        const ref = sha || BRANCH;
+        return "https://cdn.jsdelivr.net/gh/" + REPO + "@" + ref + "/" + path;
     }
 
     function fetchText(url) {
@@ -92,13 +98,41 @@
         });
     }
 
-    async function fetchCode(path) {
+    async function resolveCommitSha() {
+        if (resolvedSha) return resolvedSha;
+        const url = "https://api.github.com/repos/" + REPO + "/commits/" + BRANCH + "?t=" + Date.now();
         try {
-            return await fetchText(rawUrl(path));
-        } catch (e1) {
-            log("raw GitHub failed, trying jsDelivr...", "#FFD080");
-            return await fetchText(rawUrlJsdelivr(path));
+            const body = await fetchText(url);
+            const json = JSON.parse(body);
+            if (json && json.sha) {
+                resolvedSha = String(json.sha);
+                log("GitHub " + BRANCH + " @ " + resolvedSha.slice(0, 7), "#A0FFA0");
+                return resolvedSha;
+            }
+        } catch (e) {
+            log("Could not resolve commit SHA: " + safeError(e), "#FFD080");
         }
+        return "";
+    }
+
+    async function fetchCode(path) {
+        const sha = await resolveCommitSha();
+        try {
+            return await fetchText(rawUrl(path, sha || BRANCH));
+        } catch (e1) {
+            log("raw GitHub failed, trying jsDelivr @ " + (sha || BRANCH) + "...", "#FFD080");
+            return await fetchText(rawUrlJsdelivr(path, sha || BRANCH));
+        }
+    }
+
+    function codeFingerprint(name, code) {
+        const text = String(code || "");
+        const ver = text.match(/_botVersion:\s*["']([^"']+)["']/);
+        if (ver) return ver[1];
+        // Configs / mains often lack _botVersion — show length + short hash-ish
+        let h = 0;
+        for (let i = 0; i < text.length; i++) h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+        return "len=" + text.length + " sig=" + (h >>> 0).toString(16);
     }
 
     /**
@@ -249,8 +283,10 @@
      * @param {string[]} [onlyNames]
      */
     async function run(onlyNames) {
+        resolvedSha = ""; // force fresh tip each sync
         const list = findFiles(onlyNames);
-        log("UpdateCode: syncing " + list.length + " file(s) from " + REPO + "@" + BRANCH);
+        const sha = await resolveCommitSha();
+        log("UpdateCode: syncing " + list.length + " file(s) from " + REPO + "@" + (sha ? sha.slice(0, 7) : BRANCH));
         log("Watch chat for official 'Saved name.slot.js' messages from the game.");
 
         let ok = 0;
@@ -262,6 +298,11 @@
                 log("Fetching " + file.name + " → slot " + file.slot);
                 const code = await fetchCode(file.path);
                 if (!code || !String(code).trim()) throw new Error("Empty response");
+                const finger = codeFingerprint(file.name, code);
+                log("  got " + file.name + ": " + finger);
+                if (file.name === "MER_Logistics" && String(finger).indexOf("v13") < 0) {
+                    log("  WARNING: expected MER_Logistics_v13+, got " + finger, "#FF8080");
+                }
                 await saveCode(file.slot, file.name, code);
                 log("save_code sent: " + file.name + "." + file.slot + ".js", "#A0FFA0");
                 ok++;
@@ -277,14 +318,32 @@
         const result = await verify();
 
         log("If verified but Load dropdown empty: close CODE window and reopen.");
-        log("Or use chat: /loadcode DORG_Main");
+        log("IMPORTANT: Stop + re-run each Main after sync (in-memory code stays old).");
+        log("Or use chat: /loadcode DORCHANT_Main");
         return result;
+    }
+
+    /** Fetch only — log fingerprints, do not save (debug stale CDN). */
+    async function peek(onlyNames) {
+        resolvedSha = "";
+        const list = findFiles(onlyNames);
+        await resolveCommitSha();
+        for (let i = 0; i < list.length; i++) {
+            const file = list[i];
+            try {
+                const code = await fetchCode(file.path);
+                log("PEEK " + file.name + " → " + codeFingerprint(file.name, code));
+            } catch (e) {
+                log("PEEK FAIL " + file.name + ": " + safeError(e), "#FF8080");
+            }
+        }
     }
 
     function status() {
         log("await BOT_UPDATE.run()   — download + save + verify");
         log("await BOT_UPDATE.list()  — print server CODE slots");
         log("await BOT_UPDATE.verify()— check our slot map");
+        log("await BOT_UPDATE.peek([\"MER_Logistics\"]) — show fetched version only");
         return FILES;
     }
 
@@ -295,10 +354,11 @@
         run: run,
         list: list,
         verify: verify,
+        peek: peek,
         status: status
     };
 
     log("UpdateCode ready");
     log("1) await BOT_UPDATE.run()");
-    log("2) await BOT_UPDATE.list()");
+    log("2) Stop + reload each character Main");
 })();
