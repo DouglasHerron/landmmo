@@ -15,10 +15,13 @@
     let lastBuyAt = 0;
     let scoutAnnounceAt = 0;
     let scoutTravelDone = false;
-    let pickupRequestedAt = 0;
+    let pickupRequestedAt = Date.now(); // force first farm trip on load
     let pickupFrom = "";
     let lastPickupRoundAt = 0;
     let lingerUntil = 0;
+    let lastMoveX = 0;
+    let lastMoveY = 0;
+    let lastMoveCheckAt = 0;
 
     /** @type {Object.<string, { gear: Object.<string, number>, at: number, seen: boolean }>} */
     let partyStatus = {};
@@ -512,16 +515,37 @@
         return false;
     }
 
-    async function smartTo(dest) {
-        if (isPathing()) return;
+    async function smartTo(dest, force) {
         const t = now();
-        if (t - lastTravelAt < TRAVEL_COOLDOWN_MS) return;
+        if (!force) {
+            if (isPathing() && !isMoveStuck()) return;
+            if (t - lastTravelAt < TRAVEL_COOLDOWN_MS) return;
+        }
         lastTravelAt = t;
-        // Fire-and-forget — awaiting smart_move freezes the main busy loop
+        lastMoveX = character.x;
+        lastMoveY = character.y;
+        lastMoveCheckAt = t;
         try {
             if (typeof smart_move === "function") smart_move(dest);
         } catch (e) {
             if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
+        }
+    }
+
+    function isMoveStuck() {
+        try {
+            if (!isPathing()) return false;
+            const t = now();
+            if (t - lastMoveCheckAt < 8000) return false;
+            const dx = (character.x || 0) - lastMoveX;
+            const dy = (character.y || 0) - lastMoveY;
+            lastMoveCheckAt = t;
+            lastMoveX = character.x;
+            lastMoveY = character.y;
+            // Claimed moving but barely moved — re-issue path
+            return Math.sqrt(dx * dx + dy * dy) < 15;
+        } catch (e) {
+            return true;
         }
     }
 
@@ -586,45 +610,58 @@
         if (utils().log) utils().log("Pickup requested by " + name);
     }
 
+    function atPickupSpot(meet) {
+        if (clientsInRange() > 0) return true;
+        // Must be on a combat map near the farm — bank/town never counts
+        try {
+            if (character.map === "bank") return false;
+        } catch (e) { /* ignore */ }
+        return farmNearby(meet);
+    }
+
     /**
      * Go to farm, linger so farmers can send_item, then leave for sell/bank/home.
      */
     async function handlePickup() {
-        if (!needsPickupRound() && now() >= lingerUntil) return false;
-        if (isPathing()) return true;
-
         const meet = scoutMeet();
-        const visible = clientsInRange();
-        const atFarm = farmNearby(meet);
+        const arrived = atPickupSpot(meet);
+        const t = now();
 
-        // Still lingering beside farmers
-        if (now() < lingerUntil) {
-            if (utils().log && now() - scoutAnnounceAt > 10000) {
-                scoutAnnounceAt = now();
-                utils().log("Dorchant collecting dumps (" + Math.ceil((lingerUntil - now()) / 1000) + "s)");
+        // Only linger when actually at the farm / beside farmers
+        if (arrived && t < lingerUntil) {
+            if (t - scoutAnnounceAt > 10000) {
+                scoutAnnounceAt = t;
+                if (utils().log) {
+                    utils().log("Dorchant collecting dumps (" + Math.ceil((lingerUntil - t) / 1000) + "s)");
+                }
             }
             return true;
         }
 
-        if (visible === 0 && !atFarm) {
-            if (now() - scoutAnnounceAt > 15000) {
-                scoutAnnounceAt = now();
+        if (!needsPickupRound()) return false;
+
+        // Not there yet — keep pathing (force retry if stuck)
+        if (!arrived) {
+            if (t - scoutAnnounceAt > 10000) {
+                scoutAnnounceAt = t;
                 if (utils().log) {
                     utils().log("Dorchant → " + meet + " (collect farmer loot" +
                         (pickupFrom ? " / " + pickupFrom : "") + ")");
                 }
             }
-            await smartTo(meet);
+            await smartTo(meet, isMoveStuck());
             return true;
         }
 
-        // Arrived — linger for send_item, also refresh gear scan
+        // Arrived — start linger window once
         inspectNearbyClients();
-        lingerUntil = now() + lingerMs();
-        lastPickupRoundAt = now();
-        pickupRequestedAt = 0;
-        pickupFrom = "";
-        if (utils().log) utils().log("Dorchant at farm — waiting for dumps");
+        if (lingerUntil < t) {
+            lingerUntil = t + lingerMs();
+            lastPickupRoundAt = t;
+            pickupRequestedAt = 0;
+            pickupFrom = "";
+            if (utils().log) utils().log("Dorchant at farm — waiting for dumps");
+        }
         return true;
     }
 
@@ -900,7 +937,7 @@
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
         onCm: onCm,
-        _botVersion: "MER_Logistics_v6"
+        _botVersion: "MER_Logistics_v7"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");

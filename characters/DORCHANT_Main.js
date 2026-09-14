@@ -101,6 +101,10 @@
         root.BOT.logistics = root.BOT.logistics || { handle: function () { return false; } };
         root.BOT.benchmark = root.BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
 
+        // Reset inventory state machine so a stuck sell/return can't pin Dorchant
+        if (root.BOT.inventory && root.BOT.inventory.reset) root.BOT.inventory.reset();
+        if (root.BOT.restock && root.BOT.restock.reset) root.BOT.restock.reset();
+
         root.BOT_STATUS = {
             main: "DORCHANT_Main",
             phase: "running",

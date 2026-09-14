@@ -29,7 +29,7 @@
             mule: {
                 dumpDistance: 320,
                 deliverPots: true,
-                pickupEveryMinutes: 3,
+                pickupEveryMinutes: 2,
                 lingerSeconds: 25
             },
 
