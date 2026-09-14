@@ -80,10 +80,26 @@
         return false;
     }
 
+    function isUpgradeProtected(item) {
+        if (!item) return false;
+        try {
+            if (BOT.logistics && typeof BOT.logistics.shouldHoldItem === "function") {
+                if (BOT.logistics.shouldHoldItem(item)) return true;
+            }
+            if (BOT.logistics && typeof BOT.logistics.partyNeedsItem === "function") {
+                if (BOT.logistics.partyNeedsItem(item.name)) return true;
+            }
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
     function shouldSell(item) {
         if (!item) return false;
         const cfg = invCfg();
         if (cfg.autoSell === false) return false;
+
+        // Never sell gear the party still needs upgraded/delivered
+        if (isUpgradeProtected(item)) return false;
 
         const sellItems = cfg.sellItems || [];
         if (sellItems.indexOf(item.name) === -1) return false;
@@ -100,11 +116,7 @@
         if (cfg.autoBank === false) return false;
 
         if (isProtected(item)) return false;
-        try {
-            if (BOT.logistics && typeof BOT.logistics.shouldHoldItem === "function" && BOT.logistics.shouldHoldItem(item)) {
-                return false;
-            }
-        } catch (e) { /* ignore */ }
+        if (isUpgradeProtected(item)) return false;
         if (isLocked(item)) return true;
         if (item.name === "anniversarygift") return true;
         if (shouldSell(item)) return false;

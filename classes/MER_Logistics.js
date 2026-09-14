@@ -347,9 +347,18 @@
     function shouldHoldItem(item) {
         if (!item || !upgradeCfg().enabled) return false;
         if (isLocked(item)) return false;
-        const useful = usefulMaxLevel(item.name);
-        if (useful < 0) return false;
-        return (item.level || 0) < useful;
+
+        // Before first scout: hold any wishlist item name (don't sell/bank blind)
+        if (!allClientsInspected()) {
+            const list = targets();
+            for (let i = 0; i < list.length; i++) {
+                if (list[i] && list[i].name === item.name) return true;
+            }
+            return false;
+        }
+
+        // While party still needs this item, keep every copy (upgrade + deliver)
+        return partyNeedsItem(item.name);
     }
 
     function findUpgradeSlot() {
@@ -938,6 +947,7 @@
         atHome: atHome,
         travelHome: travelHome,
         shouldHoldItem: shouldHoldItem,
+        partyNeedsItem: partyNeedsItem,
         hasUpgradeWork: hasUpgradeWork,
         inspectClient: inspectClient,
         inspectNearbyClients: inspectNearbyClients,
@@ -946,7 +956,7 @@
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
         onCm: onCm,
-        _botVersion: "MER_Logistics_v7"
+        _botVersion: "MER_Logistics_v8"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");
