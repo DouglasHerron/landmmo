@@ -101,6 +101,11 @@
         root.BOT.restock = root.BOT.restock || { handle: function () { return false; } };
         root.BOT.logistics = root.BOT.logistics || { handle: function () { return false; } };
         root.BOT.benchmark = root.BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
+        root.BOT.townNav = root.BOT.townNav || null;
+
+        if (!root.BOT.townNav) {
+            log("CORE_TownNav MISSING — sync slot 17 (CORE_TownNav) then reload DORCHANT_Main", "#FF8080");
+        }
 
         // Reset inventory state machine so a stuck sell/return can't pin Dorchant
         if (root.BOT.inventory && root.BOT.inventory.reset) root.BOT.inventory.reset();
@@ -111,6 +116,7 @@
             phase: "running",
             party: (root.BOT.party && root.BOT.party._botVersion) || "MISSING",
             logistics: (root.BOT.logistics && root.BOT.logistics._botVersion) || "MISSING",
+            townNav: (root.BOT.townNav && root.BOT.townNav._botVersion) || "MISSING",
             home: (root.BOT.config && root.BOT.config.home && root.BOT.config.home.to) || "?"
         };
         log("BOT_STATUS = " + JSON.stringify(root.BOT_STATUS));

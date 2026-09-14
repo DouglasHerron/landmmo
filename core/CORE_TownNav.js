@@ -272,7 +272,7 @@
         return false;
     }
 
-    BOT.townNav = {
+    var api = {
         ensureCanMove: ensureCanMove,
         pathTo: pathTo,
         goBank: goBank,
@@ -286,5 +286,21 @@
         _botVersion: "townNav-v1"
     };
 
-    if (utils().log) utils().log("CORE_TownNav loaded");
+    // Attach on every common global AL uses (console BOT === window.BOT)
+    try { globalThis.BOT = globalThis.BOT || {}; globalThis.BOT.townNav = api; } catch (e1) { /* ignore */ }
+    try {
+        if (typeof window !== "undefined") {
+            window.BOT = window.BOT || globalThis.BOT || {};
+            window.BOT.townNav = api;
+            if (globalThis.BOT && globalThis.BOT !== window.BOT) {
+                // Keep both in sync if they diverged
+                globalThis.BOT.townNav = api;
+            }
+        }
+    } catch (e2) { /* ignore */ }
+
+    try {
+        if (typeof game_log === "function") game_log("CORE_TownNav loaded " + api._botVersion, "#A0FFA0");
+        else if (utils().log) utils().log("CORE_TownNav loaded");
+    } catch (e3) { /* ignore */ }
 })();
