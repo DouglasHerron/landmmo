@@ -2,7 +2,7 @@
  * PRORG_Main.js
  * Priest entrypoint — load this CODE slot on Prorg.
  *
- * Load order: Config → CORE modules → PRI_Combat → main loop
+ * Loads modules by SLOT number to avoid duplicate CODE name collisions.
  */
 (function () {
     "use strict";
@@ -25,22 +25,22 @@
         } catch (e) { /* ignore */ }
     }
 
-    function loadModule(name) {
+    function loadModule(slot, label) {
         try {
             if (typeof load_code !== "function") {
                 throw new Error("load_code unavailable");
             }
-            load_code(name);
-            log("Loaded " + name);
+            load_code(String(slot));
+            log("Loaded " + label + " (slot " + slot + ")");
             return true;
         } catch (e) {
-            log("FAILED to load " + name + ": " + safeError(e), "#FF8080");
+            log("FAILED " + label + " slot " + slot + ": " + safeError(e), "#FF8080");
             return false;
         }
     }
 
-    // --- Bootstrap ---
-    loadModule("PRORG_Config");
+    // --- Bootstrap (slots match tools/UpdateCode.js) ---
+    loadModule(32, "PRORG_Config");
 
     globalThis.BOT = globalThis.BOT || {
         role: "priest",
@@ -48,18 +48,18 @@
     };
 
     const modules = [
-        "CORE_Utils",
-        "CORE_Party",
-        "CORE_Survival",
-        "CORE_Inventory",
-        "CORE_Restock",
-        "CORE_Travel",
-        "CORE_Benchmark",
-        "PRI_Combat"
+        { slot: 10, name: "CORE_Utils" },
+        { slot: 11, name: "CORE_Party" },
+        { slot: 12, name: "CORE_Survival" },
+        { slot: 13, name: "CORE_Inventory" },
+        { slot: 14, name: "CORE_Restock" },
+        { slot: 15, name: "CORE_Travel" },
+        { slot: 16, name: "CORE_Benchmark" },
+        { slot: 21, name: "PRI_Combat" }
     ];
 
     for (let i = 0; i < modules.length; i++) {
-        loadModule(modules[i]);
+        loadModule(modules[i].slot, modules[i].name);
     }
 
     BOT.party = BOT.party || { handle: function () { return false; } };
@@ -70,6 +70,10 @@
     BOT.combat = BOT.combat || { handle: function () { return false; } };
     BOT.benchmark = BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
 
+    if (!BOT.combat || BOT.combat._botVersion !== "shared-v1") {
+        log("WARN: BOT.combat is not shared-v1 PRI_Combat — check slot 21", "#FFD080");
+    }
+
     let busy = false;
     const TICK_MS = 250;
 
@@ -78,50 +82,34 @@
         busy = true;
 
         try {
-            // 1. Party management (accept invite / request fallback)
             if (BOT.party && typeof BOT.party.handle === "function") {
                 BOT.party.handle();
             }
 
-            // 2. Death / survival
             if (BOT.survival && typeof BOT.survival.handle === "function") {
-                if (BOT.survival.handle()) {
-                    return;
-                }
+                if (BOT.survival.handle()) return;
             }
 
-            // 3. Inventory cleanup
             if (BOT.inventory && typeof BOT.inventory.handle === "function") {
-                if (await BOT.inventory.handle()) {
-                    return;
-                }
+                if (await BOT.inventory.handle()) return;
             }
 
-            // 4. Restock
             if (BOT.restock && typeof BOT.restock.handle === "function") {
-                if (await BOT.restock.handle()) {
-                    return;
-                }
+                if (await BOT.restock.handle()) return;
             }
 
-            // 5. Travel — priest has no farm.monster; follow is handled in combat
             if (BOT.travel && typeof BOT.travel.handle === "function") {
-                if (await BOT.travel.handle()) {
-                    return;
-                }
+                if (await BOT.travel.handle()) return;
             }
 
-            // 6. Combat (heal / follow / assist)
             if (BOT.combat && typeof BOT.combat.handle === "function") {
                 BOT.combat.handle();
             }
 
-            // 7. Loot
             try {
                 if (typeof loot === "function") loot();
             } catch (e) { /* ignore */ }
 
-            // 8. Benchmark update
             if (BOT.benchmark && typeof BOT.benchmark.handle === "function") {
                 BOT.benchmark.handle();
             }

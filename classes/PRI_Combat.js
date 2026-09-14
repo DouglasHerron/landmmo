@@ -231,6 +231,7 @@
     }
 
     BOT.combat = {
+        _botVersion: "shared-v1",
         handle: handle,
         getLeader: getLeader,
         healSelf: healSelf,
@@ -241,5 +242,5 @@
         loot: lootNearby
     };
 
-    if (utils().log) utils().log("PRI_Combat loaded");
+    if (utils().log) utils().log("PRI_Combat loaded (shared-v1)");
 })();

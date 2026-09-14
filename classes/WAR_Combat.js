@@ -63,6 +63,27 @@
         }
 
         if (isValidFarmTarget(target)) return target;
+
+        // Fallback: scan entities (avoids type-filter quirks)
+        try {
+            if (parent && parent.entities) {
+                let best = null;
+                let bestDist = Infinity;
+                for (const id in parent.entities) {
+                    const e = parent.entities[id];
+                    if (!isValidFarmTarget(e)) continue;
+                    const dist = utils().distanceTo ? utils().distanceTo(e) : Infinity;
+                    if (dist < bestDist && dist <= maxChase()) {
+                        best = e;
+                        bestDist = dist;
+                    }
+                }
+                if (best) return best;
+            }
+        } catch (e) {
+            // ignore
+        }
+
         return null;
     }
 
@@ -172,10 +193,11 @@
     }
 
     BOT.combat = {
+        _botVersion: "shared-v1",
         handle: handle,
         getTarget: getTarget,
         loot: lootNearby
     };
 
-    if (utils().log) utils().log("WAR_Combat loaded");
+    if (utils().log) utils().log("WAR_Combat loaded (shared-v1)");
 })();

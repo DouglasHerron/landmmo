@@ -2,7 +2,9 @@
  * DORG_Main.js
  * Warrior entrypoint — load this CODE slot on Dorg.
  *
- * Load order: Config → CORE modules → WAR_Combat → main loop
+ * IMPORTANT: load by SLOT number, not name.
+ * You still have an old WAR_Combat in slot 4; load_code("WAR_Combat")
+ * may resolve to that legacy file (expects WAR_CONFIG) instead of slot 20.
  */
 (function () {
     "use strict";
@@ -25,45 +27,44 @@
         } catch (e) { /* ignore */ }
     }
 
-    function loadModule(name) {
+    function loadModule(slot, label) {
         try {
             if (typeof load_code !== "function") {
                 throw new Error("load_code unavailable");
             }
-            load_code(name);
-            log("Loaded " + name);
+            // Prefer numeric/string slot to avoid duplicate-name collisions
+            load_code(String(slot));
+            log("Loaded " + label + " (slot " + slot + ")");
             return true;
         } catch (e) {
-            log("FAILED to load " + name + ": " + safeError(e), "#FF8080");
+            log("FAILED " + label + " slot " + slot + ": " + safeError(e), "#FF8080");
             return false;
         }
     }
 
-    // --- Bootstrap ---
-    loadModule("DORG_Config");
+    // --- Bootstrap (slots match tools/UpdateCode.js) ---
+    loadModule(30, "DORG_Config");
 
-    // Ensure config exists even if Config slot failed
     globalThis.BOT = globalThis.BOT || {
         role: "warrior",
         config: { name: "Dorg" }
     };
 
     const modules = [
-        "CORE_Utils",
-        "CORE_Party",
-        "CORE_Survival",
-        "CORE_Inventory",
-        "CORE_Restock",
-        "CORE_Travel",
-        "CORE_Benchmark",
-        "WAR_Combat"
+        { slot: 10, name: "CORE_Utils" },
+        { slot: 11, name: "CORE_Party" },
+        { slot: 12, name: "CORE_Survival" },
+        { slot: 13, name: "CORE_Inventory" },
+        { slot: 14, name: "CORE_Restock" },
+        { slot: 15, name: "CORE_Travel" },
+        { slot: 16, name: "CORE_Benchmark" },
+        { slot: 20, name: "WAR_Combat" } // NOT slot 4 (legacy WAR_Combat)
     ];
 
     for (let i = 0; i < modules.length; i++) {
-        loadModule(modules[i]);
+        loadModule(modules[i].slot, modules[i].name);
     }
 
-    // Guard missing modules
     BOT.party = BOT.party || { handle: function () { return false; } };
     BOT.survival = BOT.survival || { handle: function () { return false; } };
     BOT.inventory = BOT.inventory || { handle: async function () { return false; } };
@@ -71,6 +72,10 @@
     BOT.travel = BOT.travel || { handle: async function () { return false; } };
     BOT.combat = BOT.combat || { handle: function () { return false; } };
     BOT.benchmark = BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
+
+    if (!BOT.combat || BOT.combat._botVersion !== "shared-v1") {
+        log("WARN: BOT.combat is not shared-v1 WAR_Combat — check slot 20", "#FFD080");
+    }
 
     let busy = false;
     const TICK_MS = 250;
@@ -80,50 +85,34 @@
         busy = true;
 
         try {
-            // 1. Party management
             if (BOT.party && typeof BOT.party.handle === "function") {
                 BOT.party.handle();
             }
 
-            // 2. Death / survival
             if (BOT.survival && typeof BOT.survival.handle === "function") {
-                if (BOT.survival.handle()) {
-                    return;
-                }
+                if (BOT.survival.handle()) return;
             }
 
-            // 3. Inventory cleanup
             if (BOT.inventory && typeof BOT.inventory.handle === "function") {
-                if (await BOT.inventory.handle()) {
-                    return;
-                }
+                if (await BOT.inventory.handle()) return;
             }
 
-            // 4. Restock
             if (BOT.restock && typeof BOT.restock.handle === "function") {
-                if (await BOT.restock.handle()) {
-                    return;
-                }
+                if (await BOT.restock.handle()) return;
             }
 
-            // 5. Travel
             if (BOT.travel && typeof BOT.travel.handle === "function") {
-                if (await BOT.travel.handle()) {
-                    return;
-                }
+                if (await BOT.travel.handle()) return;
             }
 
-            // 6. Combat
             if (BOT.combat && typeof BOT.combat.handle === "function") {
                 BOT.combat.handle();
             }
 
-            // 7. Loot (also done in combat; extra safety)
             try {
                 if (typeof loot === "function") loot();
             } catch (e) { /* ignore */ }
 
-            // 8. Benchmark update
             if (BOT.benchmark && typeof BOT.benchmark.handle === "function") {
                 BOT.benchmark.handle();
             }
@@ -134,7 +123,6 @@
         }
     }
 
-    // Clear previous intervals if reloading
     if (globalThis.BOT_DORG_INTERVAL) {
         try { clearInterval(globalThis.BOT_DORG_INTERVAL); } catch (e) { /* ignore */ }
     }
