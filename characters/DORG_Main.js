@@ -27,12 +27,41 @@
         } catch (e) { /* ignore */ }
     }
 
+    function clearLeftoverTimers() {
+        const known = [
+            "BOT_PRORG_INTERVAL",
+            "BOT_DORG_INTERVAL",
+            "BOT_PRI_INTERVAL",
+            "BOT_WAR_INTERVAL",
+            "mainInterval",
+            "attack_interval",
+            "party_interval"
+        ];
+        for (let i = 0; i < known.length; i++) {
+            const key = known[i];
+            try {
+                if (globalThis[key]) {
+                    clearInterval(globalThis[key]);
+                    clearTimeout(globalThis[key]);
+                    globalThis[key] = null;
+                }
+            } catch (e) { /* ignore */ }
+        }
+        try {
+            const probe = setTimeout(function () {}, 0);
+            for (let id = 1; id <= probe; id++) {
+                try { clearInterval(id); } catch (e) { /* ignore */ }
+                try { clearTimeout(id); } catch (e) { /* ignore */ }
+            }
+        } catch (e) { /* ignore */ }
+        log("Cleared leftover timers");
+    }
+
     function loadModule(slot, label) {
         try {
             if (typeof load_code !== "function") {
                 throw new Error("load_code unavailable");
             }
-            // Prefer numeric/string slot to avoid duplicate-name collisions
             load_code(String(slot));
             log("Loaded " + label + " (slot " + slot + ")");
             return true;
@@ -41,6 +70,8 @@
             return false;
         }
     }
+
+    clearLeftoverTimers();
 
     // --- Bootstrap (slots match tools/UpdateCode.js) ---
     loadModule(30, "DORG_Config");
@@ -72,6 +103,10 @@
     BOT.travel = BOT.travel || { handle: async function () { return false; } };
     BOT.combat = BOT.combat || { handle: function () { return false; } };
     BOT.benchmark = BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
+
+    if (!BOT.party || BOT.party._botVersion !== "party-v2") {
+        log("WARN: CORE_Party is not party-v2 — sync slot 11", "#FFD080");
+    }
 
     if (!BOT.combat || BOT.combat._botVersion !== "shared-v1") {
         log("WARN: BOT.combat is not shared-v1 WAR_Combat — check slot 20", "#FFD080");

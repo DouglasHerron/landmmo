@@ -1,9 +1,6 @@
 /**
  * CORE_Party.js
- * Leader invites; follower only accepts (no request spam by default).
- *
- * Prorg was looping "request expired" because send_party_request ran
- * even while already grouped / while Dorg's invite was enough.
+ * Leader invites members. Follower ONLY accepts via on_party_invite (no polling).
  */
 (function () {
     "use strict";
@@ -11,10 +8,7 @@
     globalThis.BOT = globalThis.BOT || {};
 
     const INVITE_COOLDOWN_MS = 30000;
-    const REQUEST_COOLDOWN_MS = 60000;
-
     let lastInviteAt = 0;
-    let lastRequestAt = 0;
     let lastLogAt = 0;
 
     function utils() {
@@ -31,11 +25,6 @@
 
     function memberNames() {
         return partyCfg().members || [];
-    }
-
-    /** Follower party requests — OFF by default (Dorg invite is enough). */
-    function allowRequestFallback() {
-        return partyCfg().requestFallback === true;
     }
 
     function uniquePush(arr, name) {
@@ -96,7 +85,6 @@
             if (character && character.party) return true;
         } catch (e) { /* ignore */ }
 
-        // Fallback detections — stop follower request spam
         try {
             const list = partyList();
             if (list.length >= 2 && list.indexOf(character.name) !== -1) return true;
@@ -132,32 +120,25 @@
     }
 
     function isGrouped() {
-        if (!character) return false;
-        if (!amInAParty()) return false;
+        if (!character || !amInAParty()) return false;
 
         const leader = leaderName();
-
         if (!isLeader()) {
-            // Follower: in party with configured leader (or any party if leader unset)
             if (character.party) return !leader || character.party === leader;
-            // character.party missing but party list shows leader
             return !leader || partyList().indexOf(leader) !== -1;
         }
 
-        // Leader
         const members = memberNames();
         if (!members.length) return true;
 
         for (let i = 0; i < members.length; i++) {
             const name = members[i];
             if (playerInOurParty(name)) continue;
-
             let visible = null;
             try {
                 if (typeof get_player === "function") visible = get_player(name);
             } catch (e) { /* ignore */ }
-
-            if (!visible) continue; // offline — don't treat as ungrouped
+            if (!visible) continue;
             return false;
         }
         return true;
@@ -178,7 +159,7 @@
         lastLogAt = now;
         if (!utils().log) return;
         utils().log(
-            "Party | me=" + character.name +
+            "Party v2 | me=" + character.name +
             " party=" + (character.party || "none") +
             " inParty=" + amInAParty() +
             " grouped=" + isGrouped() +
@@ -186,30 +167,9 @@
         );
     }
 
+    /** Follower: no interval invites/requests/accepts — event only. */
     function handleFollower() {
-        // Already in a party → NEVER request / poll-accept
-        if (amInAParty()) return;
-
-        const leader = leaderName();
-        if (!leader) return;
-
-        // Only accept via event handler ideally; light poll accept is OK, no requests
-        try {
-            if (typeof accept_party_invite === "function") accept_party_invite(leader);
-        } catch (e) { /* ignore */ }
-
-        if (!allowRequestFallback()) return;
-
-        const now = Date.now();
-        if (now - lastRequestAt < REQUEST_COOLDOWN_MS) return;
-        lastRequestAt = now;
-
-        try {
-            if (typeof send_party_request === "function") {
-                send_party_request(leader);
-                if (utils().log) utils().log("Party request (fallback) -> " + leader);
-            }
-        } catch (e) { /* ignore */ }
+        // intentionally empty
     }
 
     function handleLeader() {
@@ -226,7 +186,6 @@
             if (!name || name === character.name) continue;
             if (playerInOurParty(name)) continue;
 
-            // If we're already in a party, only invite visible players
             if (amInAParty()) {
                 let visible = null;
                 try {
@@ -245,16 +204,13 @@
 
     function handle() {
         if (!character) return false;
-
         try {
             logStatus(false);
-
             if (isLeader()) handleLeader();
             else handleFollower();
         } catch (e) {
             if (utils().error) utils().error("CORE_Party: " + (utils().safeError ? utils().safeError(e) : e));
         }
-
         return false;
     }
 
@@ -278,6 +234,7 @@
     };
 
     BOT.party = {
+        _botVersion: "party-v2",
         handle: handle,
         isLeader: isLeader,
         isGrouped: isGrouped,
@@ -287,5 +244,5 @@
         logStatus: function () { logStatus(true); }
     };
 
-    if (utils().log) utils().log("CORE_Party loaded (follower requests OFF by default)");
+    if (utils().log) utils().log("CORE_Party party-v2 loaded (follower = event-only accept)");
 })();
