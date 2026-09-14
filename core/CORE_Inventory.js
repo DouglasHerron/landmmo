@@ -485,7 +485,14 @@
         lastMoveY = character.y;
         lastMoveCheckAt = lastActionAt;
 
-        if (utils().log) utils().log(label || ("Moving to " + (dest && dest.to ? dest.to : dest)));
+        if (utils().log) {
+            // Avoid spamming the same travel line every retry
+            if (!startMove._lastLabel || startMove._lastLabel !== label || now() - (startMove._lastLogAt || 0) > 15000) {
+                utils().log(label || ("Moving to " + (dest && dest.to ? dest.to : dest)));
+                startMove._lastLabel = label;
+                startMove._lastLogAt = now();
+            }
+        }
 
         // Bank: try door transport if already at entrance
         const norm = normalizeDest(dest);
