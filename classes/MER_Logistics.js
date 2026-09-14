@@ -391,6 +391,8 @@
         const cfg = buyGearCfg();
         if (cfg.enabled === false || !cfg.enabled) return [];
         if (!allClientsInspected()) return [];
+        // No gold → never route to town for gear; sell/loot first
+        if (gold() < minGoldReserve()) return [];
 
         const buy = [];
         const seen = {};
@@ -407,8 +409,8 @@
             if (merchantBestLevel(t.name) >= usefulMaxLevel(t.name)) continue;
 
             const g = gItem(t.name);
-            // Only auto-buy items the game sells (have a gold price)
             if (!g || typeof g.g !== "number") continue;
+            if (!canAfford(t.name)) continue;
 
             buy.push(t.name);
         }
@@ -432,6 +434,7 @@
         const cfg = upgradeCfg();
         if (cfg.buyScrolls === false) return [];
         if (!hasUpgradeWork()) return [];
+        if (gold() < minGoldReserve()) return [];
         const min = typeof cfg.minimumScrolls === "number" ? cfg.minimumScrolls : 5;
         const desired = typeof cfg.desiredScrolls === "number" ? cfg.desiredScrolls : 20;
         const buy = [];
@@ -441,7 +444,7 @@
         });
         for (let i = 0; i < names.length; i++) {
             const name = names[i];
-            if (quantity(name) < min) {
+            if (quantity(name) < min && canAfford(name)) {
                 buy.push({ name: name, qty: Math.max(1, desired - quantity(name)) });
             }
         }
@@ -506,17 +509,35 @@
     }
 
     async function smartTo(dest) {
+        if (isPathing()) return;
         const t = now();
-        if (t - lastTravelAt < TRAVEL_COOLDOWN_MS && isPathing()) return;
+        if (t - lastTravelAt < TRAVEL_COOLDOWN_MS) return;
         lastTravelAt = t;
-        traveling = true;
+        // Fire-and-forget — awaiting smart_move freezes the main busy loop
         try {
-            if (typeof smart_move === "function") await smart_move(dest);
+            if (typeof smart_move === "function") smart_move(dest);
         } catch (e) {
             if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
-        } finally {
-            traveling = false;
         }
+    }
+
+    function gold() {
+        try {
+            return (character && character.gold) || 0;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    function minGoldReserve() {
+        const cfg = buyGearCfg();
+        return typeof cfg.minGold === "number" ? cfg.minGold : 50000;
+    }
+
+    function canAfford(itemName) {
+        const g = gItem(itemName);
+        if (!g || typeof g.g !== "number") return false;
+        return gold() >= g.g + minGoldReserve();
     }
 
     async function travelHome() {
@@ -665,6 +686,11 @@
         const t = now();
         if (t - lastBuyAt < BUY_COOLDOWN_MS) return true;
 
+        if (!canAfford(list[0])) {
+            if (utils().log) utils().log("Skip buy gear — need gold (have " + gold() + ")");
+            return false;
+        }
+
         // Town vendors — main map near shops
         if (character.map === "bank" || !nearNpc(["basics", "weapons", "armors", "scrolls"])) {
             if (utils().log) utils().log("Dorchant → town (buy gear)");
@@ -785,7 +811,7 @@
         gearReport: gearReport,
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
-        _botVersion: "MER_Logistics_v4"
+        _botVersion: "MER_Logistics_v5"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");

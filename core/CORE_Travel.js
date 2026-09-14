@@ -104,7 +104,6 @@
         if (isPathing()) return true;
         if (now - lastTravelAt < TRAVEL_COOLDOWN_MS) return false;
 
-        traveling = true;
         lastTravelAt = now;
 
         try {
@@ -114,19 +113,18 @@
             }
             if (typeof set_message === "function") set_message("TRAVEL");
 
+            // Fire-and-forget — awaiting smart_move freezes the main busy loop
             if (typeof smart_move === "function") {
                 if (typeof dest === "object" && typeof dest.x === "number") {
-                    await smart_move(dest);
+                    smart_move(dest);
                 } else {
-                    await smart_move(String(dest));
+                    smart_move(String(dest));
                 }
             }
         } catch (e) {
             if (utils().error) utils().error("CORE_Travel: " + (utils().safeError ? utils().safeError(e) : e));
-        } finally {
-            traveling = false;
         }
-        return false;
+        return isPathing();
     }
 
     /**

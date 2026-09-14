@@ -74,7 +74,8 @@
             },
 
             buyGear: {
-                enabled: true
+                enabled: true,
+                minGold: 50000
             },
 
             survival: {

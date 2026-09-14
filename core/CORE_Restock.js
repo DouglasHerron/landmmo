@@ -1,6 +1,7 @@
 /**
  * CORE_Restock.js
  * Travel to potion vendor and restock HP/MP potions.
+ * smart_move is fire-and-forget (await hangs and freezes the main loop).
  * Attaches to: BOT.restock
  */
 (function () {
@@ -10,7 +11,9 @@
 
     let state = "idle"; // idle | traveling | buying | returning
     let lastTravelAt = 0;
+    let stateStartedAt = 0;
     const TRAVEL_RETRY_MS = 20000;
+    const STATE_TIMEOUT_MS = 90000;
 
     function utils() {
         return BOT.utils || {};
@@ -24,7 +27,6 @@
         return (BOT.config && BOT.config.farm && BOT.config.farm.monster) || "crab";
     }
 
-    /** Farmers → farm monster; merchant → config.home (e.g. { to: "bank" }). */
     function returnDest() {
         const home = BOT.config && BOT.config.home;
         if (home) {
@@ -34,21 +36,21 @@
         return farmMonster();
     }
 
+    function now() {
+        return (utils().now && utils().now()) || Date.now();
+    }
+
     function quantity(name) {
         if (!name || typeof character === "undefined" || !character.items) return 0;
 
-        // Prefer Adventure Land global quantity() if present (not this local fn)
         try {
             const alQuantity = (typeof parent !== "undefined" && parent && parent.quantity)
                 || (typeof window !== "undefined" && window && window["quantity"]);
-            // Only use if it's a different function than ours
             if (typeof alQuantity === "function" && alQuantity !== quantity) {
                 const n = alQuantity(name);
                 if (typeof n === "number") return n;
             }
-        } catch (e) {
-            // fall through to manual count
-        }
+        } catch (e) { /* fall through */ }
 
         let total = 0;
         for (let i = 0; i < character.items.length; i++) {
@@ -78,32 +80,70 @@
         return hpCount() < minHp || mpCount() < minMp;
     }
 
+    function isPathing() {
+        try {
+            if (typeof is_moving === "function" && is_moving(character)) return true;
+            if (typeof smart !== "undefined" && smart && smart.moving) return true;
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
     function nearPotionVendor() {
         try {
             if (typeof find_npc === "function") {
                 const npc = find_npc("fancypots") || find_npc("pots") || find_npc("basics");
                 if (npc && utils().distanceTo && utils().distanceTo(npc) < 350) return true;
             }
-        } catch (e) {
-            // ignore
-        }
+        } catch (e) { /* ignore */ }
         return false;
     }
 
-    async function travelToPotions() {
-        if (utils().log) utils().log("Traveling to potion vendor");
-        lastTravelAt = (utils().now && utils().now()) || Date.now();
+    function nearBank() {
         try {
-            if (typeof smart_move === "function") {
-                await smart_move({ to: "potions" });
+            if (character.map === "bank") return true;
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
+    function atReturnDest() {
+        const dest = returnDest();
+        if (dest && dest.to === "bank") return nearBank();
+        if (dest && typeof dest.x === "number") {
+            if (dest.map && character.map !== dest.map) return false;
+            const dx = character.x - dest.x;
+            const dy = character.y - dest.y;
+            return Math.sqrt(dx * dx + dy * dy) < 80;
+        }
+        try {
+            const mtype = String(dest || "crab");
+            if (typeof get_nearest_monster === "function") {
+                const mon = get_nearest_monster({ type: mtype });
+                if (mon && utils().distanceTo && utils().distanceTo(mon) < 600) return true;
             }
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
+    function startMove(dest, label) {
+        if (isPathing()) return;
+        if (now() - lastTravelAt < TRAVEL_RETRY_MS && lastTravelAt > 0) return;
+        lastTravelAt = now();
+        if (utils().log && label) utils().log(label);
+        try {
+            if (typeof smart_move === "function") smart_move(dest);
         } catch (e) {
-            if (utils().error) utils().error("travel potions: " + (utils().safeError ? utils().safeError(e) : e));
+            if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
         }
     }
 
     function buyPotions() {
         const cfg = restockCfg();
+        const gold = (character && character.gold) || 0;
+        if (gold < 1000) {
+            if (utils().warn) utils().warn("Restock skipped — not enough gold");
+            return 0;
+        }
+
         const hpName = cfg.hpPotion || "hpot1";
         const mpName = cfg.mpPotion || "mpot1";
         const desiredHp = typeof cfg.desiredHpPotions === "number" ? cfg.desiredHpPotions : 500;
@@ -132,55 +172,64 @@
         return bought;
     }
 
-    async function returnToFarm() {
-        const dest = returnDest();
-        const label = (dest && dest.to) || dest || "?";
-        if (utils().log) utils().log("Restock done — returning to " + label);
-        try {
-            if (typeof smart_move === "function") {
-                await smart_move(dest);
-            }
-        } catch (e) {
-            if (utils().error) utils().error("restock return: " + (utils().safeError ? utils().safeError(e) : e));
-        }
+    function setState(next) {
+        state = next;
+        stateStartedAt = now();
     }
 
-    /**
-     * @returns {boolean} true when restock should override combat
-     */
     async function handle() {
         if (typeof character === "undefined" || !character) return false;
 
         const cfg = restockCfg();
         if (cfg.enabled === false) return false;
 
-        const now = (utils().now && utils().now()) || Date.now();
+        const t = now();
 
         try {
+            if (state !== "idle" && t - stateStartedAt > STATE_TIMEOUT_MS) {
+                if (utils().warn) utils().warn("Restock timeout — returning");
+                setState("returning");
+                startMove(returnDest(), "Restock abort — returning");
+            }
+
             if (state === "idle") {
                 if (!needsRestock()) return false;
-                state = "traveling";
-                await travelToPotions();
+                // Broke characters should farm, not spin on vendors
+                if ((character.gold || 0) < 1000) return false;
+                setState("traveling");
+                startMove({ to: "potions" }, "Traveling to potion vendor");
                 return true;
             }
 
             if (state === "traveling") {
-                if (!nearPotionVendor()) {
-                    if (now - lastTravelAt > TRAVEL_RETRY_MS) {
-                        await travelToPotions();
-                    }
+                if (!needsRestock()) {
+                    setState("returning");
+                    startMove(returnDest(), "Restock no longer needed — returning");
                     return true;
                 }
-                state = "buying";
+                if (!nearPotionVendor()) {
+                    startMove({ to: "potions" }, "Traveling to potion vendor");
+                    return true;
+                }
+                setState("buying");
                 buyPotions();
-                state = "returning";
-                await returnToFarm();
-                state = "idle";
+                setState("returning");
+                startMove(returnDest(), "Restock done — returning");
                 return true;
             }
 
-            if (state === "buying" || state === "returning") {
+            if (state === "returning") {
+                if (atReturnDest() || (!isPathing() && t - stateStartedAt > TRAVEL_RETRY_MS * 2)) {
+                    setState("idle");
+                    return false;
+                }
+                if (!isPathing()) startMove(returnDest(), "Returning from restock");
                 return true;
+            }
+
+            if (state === "buying") {
+                setState("idle");
+                return false;
             }
         } catch (e) {
             state = "idle";
@@ -197,7 +246,8 @@
         needsRestock: needsRestock,
         buyPotions: buyPotions,
         handle: handle,
-        getState: function () { return state; }
+        getState: function () { return state; },
+        reset: function () { state = "idle"; stateStartedAt = 0; }
     };
 
     if (utils().log) utils().log("CORE_Restock loaded");

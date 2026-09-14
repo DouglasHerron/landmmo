@@ -1,6 +1,7 @@
 /**
  * CORE_Inventory.js
  * Sell approved junk near vendors, bank loot, return to farm.
+ * smart_move is fire-and-forget (await hangs and freezes the main loop).
  * Attaches to: BOT.inventory
  */
 (function () {
@@ -10,7 +11,9 @@
 
     let state = "idle"; // idle | traveling_sell | selling | traveling_bank | banking | returning
     let lastActionAt = 0;
-    const ACTION_COOLDOWN_MS = 1500;
+    let stateStartedAt = 0;
+    const TRAVEL_RETRY_MS = 20000;
+    const STATE_TIMEOUT_MS = 90000;
 
     function utils() {
         return BOT.utils || {};
@@ -32,6 +35,10 @@
             if (typeof home.x === "number" && typeof home.y === "number") return home;
         }
         return farmMonster();
+    }
+
+    function now() {
+        return (utils().now && utils().now()) || Date.now();
     }
 
     function usedSlots() {
@@ -68,16 +75,11 @@
 
     function hasStats(item) {
         if (!item) return false;
-        // Statted / compound / special props — keep these
         if (item.stat_type) return true;
-        if (item.p) return true; // shiny / special
+        if (item.p) return true;
         return false;
     }
 
-    /**
-     * Only sell exact item IDs in sellItems whitelist,
-     * and only +0, unlocked, unstatted, unprotected.
-     */
     function shouldSell(item) {
         if (!item) return false;
         const cfg = invCfg();
@@ -92,51 +94,46 @@
         return true;
     }
 
-    /**
-     * Bank remaining loot when still low on space.
-     * +1+ versions, gifts, and non-sell junk go to bank.
-     */
     function shouldBank(item) {
         if (!item) return false;
         const cfg = invCfg();
         if (cfg.autoBank === false) return false;
 
         if (isProtected(item)) return false;
-        // Merchant wishlist gear — keep in inventory until upgrade hits maxLevel
         try {
             if (BOT.logistics && typeof BOT.logistics.shouldHoldItem === "function" && BOT.logistics.shouldHoldItem(item)) {
                 return false;
             }
-        } catch (e) {
-            // ignore
-        }
-        if (isLocked(item)) return true; // don't sell; bank if needed
+        } catch (e) { /* ignore */ }
+        if (isLocked(item)) return true;
         if (item.name === "anniversarygift") return true;
         if (shouldSell(item)) return false;
-        // Upgraded / statted gear and other loot
         if ((item.level || 0) > 0) return true;
         if (hasStats(item)) return true;
-        // Unknown junk — bank rather than destroy/sell
         return true;
+    }
+
+    function isPathing() {
+        try {
+            if (typeof is_moving === "function" && is_moving(character)) return true;
+            if (typeof smart !== "undefined" && smart && smart.moving) return true;
+        } catch (e) { /* ignore */ }
+        return false;
     }
 
     function nearMerchant() {
         try {
             if (typeof find_npc === "function") {
-                const npc = find_npc("basics") || find_npc("exchange") || find_npc("pots");
+                const npc = find_npc("basics") || find_npc("exchange") || find_npc("pots") || find_npc("fancypots");
                 if (npc && utils().distanceTo && utils().distanceTo(npc) < 400) return true;
             }
-        } catch (e) {
-            // ignore
-        }
-        // Fallback: in main town map near spawn area
+        } catch (e) { /* ignore */ }
         try {
-            if (character.map === "main" && Math.abs(character.x) < 200 && Math.abs(character.y) < 200) {
+            // Town plaza fallback (broader than old 200px — spawn isn't always 0,0)
+            if (character.map === "main" && Math.abs(character.x) < 100 && Math.abs(character.y) < 150) {
                 return true;
             }
-        } catch (e) {
-            // ignore
-        }
+        } catch (e) { /* ignore */ }
         return false;
     }
 
@@ -147,9 +144,27 @@
                 const npc = find_npc("bank");
                 if (npc && utils().distanceTo && utils().distanceTo(npc) < 400) return true;
             }
-        } catch (e) {
-            // ignore
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
+    function atReturnDest() {
+        const dest = returnDest();
+        if (dest && dest.to === "bank") return nearBank();
+        if (dest && typeof dest.x === "number") {
+            if (dest.map && character.map !== dest.map) return false;
+            const dx = character.x - dest.x;
+            const dy = character.y - dest.y;
+            return Math.sqrt(dx * dx + dy * dy) < 80;
         }
+        // Farm monster nearby
+        try {
+            const mtype = String(dest || "crab");
+            if (typeof get_nearest_monster === "function") {
+                const mon = get_nearest_monster({ type: mtype });
+                if (mon && utils().distanceTo && utils().distanceTo(mon) < 600) return true;
+            }
+        } catch (e) { /* ignore */ }
         return false;
     }
 
@@ -167,7 +182,7 @@
             const item = character.items[i];
             if (!item) continue;
             if (isProtected(item)) continue;
-            if (shouldSell(item)) continue; // sell first when autoSell
+            if (shouldSell(item)) continue;
             if (shouldBank(item)) return i;
         }
         return -1;
@@ -177,51 +192,45 @@
         return findSellSlot() !== -1;
     }
 
-    function needsCleanup() {
-        const cfg = invCfg();
-        if (!inventoryFullSoon()) {
-            // Still bank anniversarygift even if not full
-            if (character.items) {
-                for (let i = 0; i < character.items.length; i++) {
-                    const it = character.items[i];
-                    if (it && it.name === "anniversarygift") return true;
-                }
-            }
-            return false;
+    function hasAnniversaryGift() {
+        if (!character.items) return false;
+        for (let i = 0; i < character.items.length; i++) {
+            const it = character.items[i];
+            if (it && it.name === "anniversarygift") return true;
         }
+        return false;
+    }
+
+    function needsCleanup() {
+        if (hasAnniversaryGift()) return true;
+        if (!inventoryFullSoon()) return false;
+        const cfg = invCfg();
         if (cfg.autoSell !== false && hasJunkToSell()) return true;
         if (cfg.autoBank !== false && findBankSlot() !== -1) return true;
-        return inventoryFullSoon();
+        // Full but nothing actionable — do not leave the farm
+        return false;
     }
 
-    async function travelToSell() {
-        if (utils().log) utils().log("Traveling to merchant to sell junk");
-        try {
-            if (typeof smart_move === "function") {
-                await smart_move({ to: "main" });
-            }
-        } catch (e) {
-            if (utils().error) utils().error("travel sell: " + (utils().safeError ? utils().safeError(e) : e));
-        }
+    function setState(next) {
+        state = next;
+        stateStartedAt = now();
+        lastActionAt = stateStartedAt;
     }
 
-    async function travelToBank() {
-        if (utils().log) utils().log("Traveling to bank");
+    function startMove(dest, label) {
+        if (isPathing()) return;
+        if (now() - lastActionAt < TRAVEL_RETRY_MS && lastActionAt > 0) return;
+        lastActionAt = now();
+        if (utils().log) utils().log(label || ("Moving to " + (dest && dest.to ? dest.to : dest)));
         try {
-            if (typeof smart_move === "function") {
-                await smart_move({ to: "bank" });
-            }
+            if (typeof smart_move === "function") smart_move(dest);
         } catch (e) {
-            if (utils().error) utils().error("travel bank: " + (utils().safeError ? utils().safeError(e) : e));
+            if (utils().error) utils().error("smart_move: " + (utils().safeError ? utils().safeError(e) : e));
         }
     }
 
     function sellJunk() {
-        if (!nearMerchant()) {
-            if (utils().warn) utils().warn("sellJunk: not near merchant — skip");
-            return 0;
-        }
-
+        if (!nearMerchant()) return 0;
         let sold = 0;
         if (!character.items) return 0;
 
@@ -242,11 +251,7 @@
     }
 
     function bankItems() {
-        if (!nearBank()) {
-            if (utils().warn) utils().warn("bankItems: not near bank — skip");
-            return 0;
-        }
-
+        if (!nearBank()) return 0;
         let stored = 0;
         if (!character.items) return 0;
 
@@ -256,7 +261,6 @@
             if (isProtected(item)) continue;
             if (shouldSell(item)) continue;
             if (!shouldBank(item) && item.name !== "anniversarygift") {
-                // When inventory still tight, bank non-protected loot
                 if (!inventoryFullSoon()) continue;
             }
             try {
@@ -272,17 +276,10 @@
         return stored;
     }
 
-    async function returnToFarm() {
-        const dest = returnDest();
-        const label = (dest && dest.to) || dest || "?";
-        if (utils().log) utils().log("Returning to: " + label);
-        try {
-            if (typeof smart_move === "function") {
-                await smart_move(dest);
-            }
-        } catch (e) {
-            if (utils().error) utils().error("returnToFarm: " + (utils().safeError ? utils().safeError(e) : e));
-        }
+    function abortToFarm(reason) {
+        if (utils().warn) utils().warn("Inventory abort: " + reason);
+        setState("returning");
+        startMove(returnDest(), "Returning to: " + ((returnDest() && returnDest().to) || returnDest() || "?"));
     }
 
     /**
@@ -292,23 +289,27 @@
         if (typeof character === "undefined" || !character) return false;
 
         const cfg = invCfg();
-        const now = (utils().now && utils().now()) || Date.now();
+        const t = now();
 
         try {
+            // Global timeout — never freeze combat forever
+            if (state !== "idle" && t - stateStartedAt > STATE_TIMEOUT_MS) {
+                abortToFarm("timeout in " + state);
+            }
+
             if (state === "idle") {
                 if (!needsCleanup()) return false;
 
-                if (cfg.autoSell !== false && hasJunkToSell()) {
-                    state = "traveling_sell";
-                    lastActionAt = now;
-                    await travelToSell();
+                // Sell only when low on space AND whitelist junk exists
+                if (cfg.autoSell !== false && inventoryFullSoon() && hasJunkToSell()) {
+                    setState("traveling_sell");
+                    startMove({ to: "main" }, "Traveling to merchant to sell junk");
                     return true;
                 }
 
-                if (cfg.autoBank !== false && (inventoryFullSoon() || findBankSlot() !== -1)) {
-                    state = "traveling_bank";
-                    lastActionAt = now;
-                    await travelToBank();
+                if (cfg.autoBank !== false && (hasAnniversaryGift() || (inventoryFullSoon() && findBankSlot() !== -1))) {
+                    setState("traveling_bank");
+                    startMove({ to: "bank" }, "Traveling to bank");
                     return true;
                 }
 
@@ -316,48 +317,56 @@
             }
 
             if (state === "traveling_sell") {
-                if (!nearMerchant()) {
-                    if (now - lastActionAt > 30000) {
-                        // retry travel
-                        lastActionAt = now;
-                        await travelToSell();
-                    }
+                // Abort if inventory freed up / nothing left to sell
+                if (!hasJunkToSell() || !inventoryFullSoon()) {
+                    abortToFarm("sell no longer needed");
                     return true;
                 }
-                state = "selling";
+                if (!nearMerchant()) {
+                    startMove({ to: "main" }, "Traveling to merchant to sell junk");
+                    return true;
+                }
+                setState("selling");
                 sellJunk();
-                lastActionAt = now;
-
-                if (inventoryFullSoon() && cfg.autoBank !== false) {
-                    state = "traveling_bank";
-                    await travelToBank();
+                if (inventoryFullSoon() && cfg.autoBank !== false && findBankSlot() !== -1) {
+                    setState("traveling_bank");
+                    startMove({ to: "bank" }, "Traveling to bank");
                 } else {
-                    state = "returning";
-                    await returnToFarm();
-                    state = "idle";
+                    setState("returning");
+                    startMove(returnDest(), "Returning to farm");
                 }
                 return true;
             }
 
             if (state === "traveling_bank") {
-                if (!nearBank()) {
-                    if (now - lastActionAt > 30000) {
-                        lastActionAt = now;
-                        await travelToBank();
-                    }
+                if (!hasAnniversaryGift() && !inventoryFullSoon() && findBankSlot() === -1) {
+                    abortToFarm("bank no longer needed");
                     return true;
                 }
-                state = "banking";
+                if (!nearBank()) {
+                    startMove({ to: "bank" }, "Traveling to bank");
+                    return true;
+                }
+                setState("banking");
                 bankItems();
-                lastActionAt = now;
-                state = "returning";
-                await returnToFarm();
-                state = "idle";
+                setState("returning");
+                startMove(returnDest(), "Returning to farm");
                 return true;
             }
 
             if (state === "returning") {
+                if (atReturnDest() || (!isPathing() && t - stateStartedAt > TRAVEL_RETRY_MS * 2)) {
+                    setState("idle");
+                    return false;
+                }
+                if (!isPathing()) startMove(returnDest(), "Returning to farm");
                 return true;
+            }
+
+            // selling / banking are instantaneous transitions
+            if (state === "selling" || state === "banking") {
+                setState("idle");
+                return false;
             }
         } catch (e) {
             state = "idle";
@@ -376,9 +385,9 @@
         shouldBank: shouldBank,
         sellJunk: sellJunk,
         bankItems: bankItems,
-        returnToFarm: returnToFarm,
         handle: handle,
-        getState: function () { return state; }
+        getState: function () { return state; },
+        reset: function () { state = "idle"; stateStartedAt = 0; }
     };
 
     if (utils().log) utils().log("CORE_Inventory loaded");
