@@ -1,12 +1,14 @@
 /**
  * PRORG_Main.js
- * Priest entrypoint — load this CODE slot on Prorg.
- *
- * IMPORTANT: Always STOP code before running this, or old PRI_Main
- * intervals keep inviting/requesting forever in the background.
+ * Priest entrypoint — Run THIS slot on Prorg (Stop first).
  */
 (function () {
     "use strict";
+
+    // Adventure Land runner global (prefer window — reliable in AL console)
+    var root = (typeof window !== "undefined") ? window
+             : (typeof globalThis !== "undefined") ? globalThis
+             : this;
 
     function safeError(error) {
         try {
@@ -22,45 +24,42 @@
     function log(msg, color) {
         try {
             if (typeof game_log === "function") game_log(String(msg), color || "#A0FFA0");
-            else console.log(String(msg));
+            else if (typeof console !== "undefined") console.log(String(msg));
         } catch (e) { /* ignore */ }
     }
 
-    /**
-     * Kill leftover intervals/timeouts from old PRI_Main / previous runs.
-     * Standard Adventure Land reload pattern.
-     */
+    // Immediate proof that THIS file started (before any loads)
+    root.BOT_STATUS = { main: "PRORG_Main", phase: "starting" };
+    log("PRORG_Main starting...");
+    try {
+        if (typeof set_message === "function") set_message("PRORG boot");
+    } catch (e) { /* ignore */ }
+
     function clearLeftoverTimers() {
-        const known = [
+        var known = [
             "BOT_PRORG_INTERVAL",
             "BOT_DORG_INTERVAL",
             "BOT_PRI_INTERVAL",
-            "BOT_WAR_INTERVAL",
-            "mainInterval",
-            "attack_interval",
-            "party_interval"
+            "BOT_WAR_INTERVAL"
         ];
-        for (let i = 0; i < known.length; i++) {
-            const key = known[i];
+        for (var i = 0; i < known.length; i++) {
             try {
-                if (globalThis[key]) {
-                    clearInterval(globalThis[key]);
-                    clearTimeout(globalThis[key]);
-                    globalThis[key] = null;
+                if (root[known[i]]) {
+                    clearInterval(root[known[i]]);
+                    clearTimeout(root[known[i]]);
+                    root[known[i]] = null;
                 }
             } catch (e) { /* ignore */ }
         }
-
-        // Broad clear — stops old PRI_Main setIntervals that weren't stored on a global
+        // Broad clear of prior bot loops (old PRI_Main)
         try {
-            const probe = setTimeout(function () {}, 0);
-            for (let id = 1; id <= probe; id++) {
-                try { clearInterval(id); } catch (e) { /* ignore */ }
-                try { clearTimeout(id); } catch (e) { /* ignore */ }
+            var probe = setTimeout(function () {}, 0);
+            for (var id = 1; id <= probe; id++) {
+                try { clearInterval(id); } catch (e1) { /* ignore */ }
+                try { clearTimeout(id); } catch (e2) { /* ignore */ }
             }
         } catch (e) { /* ignore */ }
-
-        log("Cleared leftover timers (old PRI_Main loops included)");
+        log("Cleared leftover timers");
     }
 
     function loadModule(slot, label) {
@@ -75,93 +74,77 @@
         }
     }
 
-    clearLeftoverTimers();
+    try {
+        clearLeftoverTimers();
 
-    loadModule(32, "PRORG_Config");
+        loadModule(32, "PRORG_Config");
 
-    globalThis.BOT = globalThis.BOT || {
-        role: "priest",
-        config: { name: "Prorg" }
-    };
+        root.BOT = root.BOT || { role: "priest", config: { name: "Prorg" } };
 
-    const modules = [
-        { slot: 10, name: "CORE_Utils" },
-        { slot: 11, name: "CORE_Party" },
-        { slot: 12, name: "CORE_Survival" },
-        { slot: 13, name: "CORE_Inventory" },
-        { slot: 14, name: "CORE_Restock" },
-        { slot: 15, name: "CORE_Travel" },
-        { slot: 16, name: "CORE_Benchmark" },
-        { slot: 21, name: "PRI_Combat" }
-    ];
+        var modules = [
+            { slot: 10, name: "CORE_Utils" },
+            { slot: 11, name: "CORE_Party" },
+            { slot: 12, name: "CORE_Survival" },
+            { slot: 13, name: "CORE_Inventory" },
+            { slot: 14, name: "CORE_Restock" },
+            { slot: 15, name: "CORE_Travel" },
+            { slot: 16, name: "CORE_Benchmark" },
+            { slot: 21, name: "PRI_Combat" }
+        ];
 
-    for (let i = 0; i < modules.length; i++) {
-        loadModule(modules[i].slot, modules[i].name);
-    }
-
-    BOT.party = BOT.party || { handle: function () { return false; } };
-    BOT.survival = BOT.survival || { handle: function () { return false; } };
-    BOT.inventory = BOT.inventory || { handle: async function () { return false; } };
-    BOT.restock = BOT.restock || { handle: async function () { return false; } };
-    BOT.travel = BOT.travel || { handle: async function () { return false; } };
-    BOT.combat = BOT.combat || { handle: function () { return false; } };
-    BOT.benchmark = BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
-
-    if (!BOT.party || BOT.party._botVersion !== "party-v2") {
-        log("WARN: CORE_Party is not party-v2 — sync slot 11", "#FFD080");
-    } else {
-        log("Party module OK (party-v2, follower event-only)");
-    }
-
-    if (!BOT.combat || BOT.combat._botVersion !== "shared-v1") {
-        log("WARN: BOT.combat is not shared-v1 PRI_Combat — check slot 21", "#FFD080");
-    }
-
-    globalThis.BOT_STATUS = {
-        main: "PRORG_Main",
-        party: (BOT.party && BOT.party._botVersion) || "MISSING",
-        combat: (BOT.combat && BOT.combat._botVersion) || "MISSING",
-        leader: (BOT.config && BOT.config.party && BOT.config.party.leader) || "?"
-    };
-    log("BOT_STATUS = " + JSON.stringify(globalThis.BOT_STATUS));
-    if (typeof set_message === "function") {
-        set_message("PRORG " + globalThis.BOT_STATUS.party);
-    }
-
-    let busy = false;
-    const TICK_MS = 250;
-
-    async function mainTick() {
-        if (busy) return;
-        busy = true;
-        try {
-            if (BOT.party && typeof BOT.party.handle === "function") BOT.party.handle();
-            if (BOT.survival && typeof BOT.survival.handle === "function") {
-                if (BOT.survival.handle()) return;
-            }
-            if (BOT.inventory && typeof BOT.inventory.handle === "function") {
-                if (await BOT.inventory.handle()) return;
-            }
-            if (BOT.restock && typeof BOT.restock.handle === "function") {
-                if (await BOT.restock.handle()) return;
-            }
-            if (BOT.travel && typeof BOT.travel.handle === "function") {
-                if (await BOT.travel.handle()) return;
-            }
-            if (BOT.combat && typeof BOT.combat.handle === "function") BOT.combat.handle();
-            try { if (typeof loot === "function") loot(); } catch (e) { /* ignore */ }
-            if (BOT.benchmark && typeof BOT.benchmark.handle === "function") BOT.benchmark.handle();
-        } catch (error) {
-            log("PRORG main error: " + safeError(error), "#FF8080");
-        } finally {
-            busy = false;
+        for (var m = 0; m < modules.length; m++) {
+            loadModule(modules[m].slot, modules[m].name);
         }
+
+        root.BOT.party = root.BOT.party || { handle: function () { return false; } };
+        root.BOT.survival = root.BOT.survival || { handle: function () { return false; } };
+        root.BOT.inventory = root.BOT.inventory || { handle: function () { return false; } };
+        root.BOT.restock = root.BOT.restock || { handle: function () { return false; } };
+        root.BOT.travel = root.BOT.travel || { handle: function () { return false; } };
+        root.BOT.combat = root.BOT.combat || { handle: function () { return false; } };
+        root.BOT.benchmark = root.BOT.benchmark || { handle: function () { return false; }, report: function () {}, reset: function () {} };
+
+        root.BOT_STATUS = {
+            main: "PRORG_Main",
+            phase: "running",
+            party: (root.BOT.party && root.BOT.party._botVersion) || "MISSING",
+            combat: (root.BOT.combat && root.BOT.combat._botVersion) || "MISSING",
+            leader: (root.BOT.config && root.BOT.config.party && root.BOT.config.party.leader) || "?"
+        };
+        log("BOT_STATUS = " + JSON.stringify(root.BOT_STATUS));
+        try {
+            if (typeof set_message === "function") set_message("PRORG " + root.BOT_STATUS.party);
+        } catch (e) { /* ignore */ }
+
+        var busy = false;
+        var TICK_MS = 250;
+
+        async function mainTick() {
+            if (busy) return;
+            busy = true;
+            try {
+                if (root.BOT.party && root.BOT.party.handle) root.BOT.party.handle();
+                if (root.BOT.survival && root.BOT.survival.handle && root.BOT.survival.handle()) return;
+                if (root.BOT.inventory && root.BOT.inventory.handle && await root.BOT.inventory.handle()) return;
+                if (root.BOT.restock && root.BOT.restock.handle && await root.BOT.restock.handle()) return;
+                if (root.BOT.travel && root.BOT.travel.handle && await root.BOT.travel.handle()) return;
+                if (root.BOT.combat && root.BOT.combat.handle) root.BOT.combat.handle();
+                try { if (typeof loot === "function") loot(); } catch (e) { /* ignore */ }
+                if (root.BOT.benchmark && root.BOT.benchmark.handle) root.BOT.benchmark.handle();
+            } catch (error) {
+                log("PRORG main error: " + safeError(error), "#FF8080");
+            } finally {
+                busy = false;
+            }
+        }
+
+        root.BOT_PRORG_INTERVAL = setInterval(function () {
+            mainTick();
+        }, TICK_MS);
+
+        log("PRORG_Main running. In CODE console type: BOT_STATUS");
+    } catch (error) {
+        root.BOT_STATUS = { main: "PRORG_Main", phase: "CRASHED", error: safeError(error) };
+        log("PRORG_Main CRASHED: " + safeError(error), "#FF8080");
     }
-
-    globalThis.BOT_PRORG_INTERVAL = setInterval(function () {
-        mainTick();
-    }, TICK_MS);
-
-    log("PRORG_Main running — leader=" + ((BOT.config.party && BOT.config.party.leader) || "?"));
-    log("Do NOT also run PRI_Main. Check: BOT.party._botVersion");
 })();
