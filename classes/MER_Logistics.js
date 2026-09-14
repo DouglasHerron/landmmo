@@ -14,6 +14,7 @@
     let lastScoutAt = 0;
     let lastBuyAt = 0;
     let scoutAnnounceAt = 0;
+    let scoutTravelDone = false; // must leave home once before accepting "neverSeen" snapshot
 
     /** @type {Object.<string, { gear: Object.<string, number>, at: number, seen: boolean }>} */
     let partyStatus = {};
@@ -604,17 +605,27 @@
         const visible = clientsInRange();
         const atFarm = farmNearby(meet);
 
-        // Travel to farm until we can see the party (or the farm itself)
-        if (visible < clients().length && !atFarm) {
-            if (now() - scoutAnnounceAt > 20000) {
+        // Always go to the farm first if nobody is in range yet
+        if (visible === 0 && !atFarm) {
+            if (now() - scoutAnnounceAt > 15000) {
                 scoutAnnounceAt = now();
                 if (utils().log) utils().log("Dorchant scout → " + meet + " (inspect party gear)");
             }
+            await smartTo(typeof meet === "string" ? meet : meet);
+            scoutTravelDone = true;
+            return true;
+        }
+
+        // Some visible but not all — still walk to farm once
+        if (visible < clients().length && !atFarm && !scoutTravelDone) {
+            if (utils().log) utils().log("Dorchant scout → " + meet);
             await smartTo(meet);
+            scoutTravelDone = true;
             return true;
         }
 
         finalizeScoutPass();
+        scoutTravelDone = false; // allow next interval scout to travel again
         if (utils().log) {
             utils().log("Party gear scanned");
             gearReport();
@@ -774,7 +785,7 @@
         gearReport: gearReport,
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
-        _botVersion: "MER_Logistics_v3"
+        _botVersion: "MER_Logistics_v4"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");

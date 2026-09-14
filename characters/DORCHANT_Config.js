@@ -15,7 +15,8 @@
             party: {
                 leader: "Dorg",
                 members: ["Dorg"],
-                requestFallback: false
+                // Request if Dorg's invite hasn't arrived (merchant often off-screen)
+                requestFallback: true
             },
 
             // Characters Dorchant services (pots / gear / dumps) — expand as roster grows

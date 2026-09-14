@@ -1,6 +1,6 @@
 /**
  * CORE_Party.js
- * Leader invites members. Follower ONLY accepts via on_party_invite (no polling).
+ * Leader invites members by name (even off-screen). Follower accepts invite; optional request fallback.
  */
 (function () {
     "use strict";
@@ -9,6 +9,7 @@
 
     const INVITE_COOLDOWN_MS = 30000;
     let lastInviteAt = 0;
+    let lastRequestAt = 0;
     let lastLogAt = 0;
 
     function utils() {
@@ -119,6 +120,10 @@
         return !!(leader && character && character.name === leader);
     }
 
+    /**
+     * Leader: every configured member must actually be in the party.
+     * (Do NOT skip off-screen members — that blocked Dorchant invites forever.)
+     */
     function isGrouped() {
         if (!character || !amInAParty()) return false;
 
@@ -133,13 +138,8 @@
 
         for (let i = 0; i < members.length; i++) {
             const name = members[i];
-            if (playerInOurParty(name)) continue;
-            let visible = null;
-            try {
-                if (typeof get_player === "function") visible = get_player(name);
-            } catch (e) { /* ignore */ }
-            if (!visible) continue;
-            return false;
+            if (!name || name === character.name) continue;
+            if (!playerInOurParty(name)) return false;
         }
         return true;
     }
@@ -153,13 +153,21 @@
         }
     }
 
+    function sendRequest(name) {
+        try {
+            if (typeof send_party_request === "function") send_party_request(name);
+        } catch (e) {
+            if (utils().error) utils().error("party request: " + (utils().safeError ? utils().safeError(e) : e));
+        }
+    }
+
     function logStatus(force) {
         const now = Date.now();
         if (!force && now - lastLogAt < 20000) return;
         lastLogAt = now;
         if (!utils().log) return;
         utils().log(
-            "Party v2 | me=" + character.name +
+            "Party v3 | me=" + character.name +
             " party=" + (character.party || "none") +
             " inParty=" + amInAParty() +
             " grouped=" + isGrouped() +
@@ -167,36 +175,44 @@
         );
     }
 
-    /** Follower: no interval invites/requests/accepts — event only. */
+    /** Follower: optional party request if invite hasn't arrived. */
     function handleFollower() {
-        // intentionally empty
+        const cfg = partyCfg();
+        if (cfg.requestFallback === false) return;
+        if (amInAParty()) return;
+
+        const leader = leaderName();
+        if (!leader) return;
+
+        const now = Date.now();
+        if (now - lastRequestAt < INVITE_COOLDOWN_MS) return;
+        lastRequestAt = now;
+        sendRequest(leader);
+        if (utils().log) utils().log("Party request -> " + leader);
     }
 
     function handleLeader() {
-        if (isGrouped()) return;
-
-        const now = Date.now();
-        if (now - lastInviteAt < INVITE_COOLDOWN_MS) return;
-
         const members = memberNames();
-        let invited = false;
+        const missing = [];
 
         for (let i = 0; i < members.length; i++) {
             const name = members[i];
             if (!name || name === character.name) continue;
             if (playerInOurParty(name)) continue;
+            missing.push(name);
+        }
 
-            if (amInAParty()) {
-                let visible = null;
-                try {
-                    if (typeof get_player === "function") visible = get_player(name);
-                } catch (e) { /* ignore */ }
-                if (!visible) continue;
-            }
+        if (!missing.length && amInAParty()) return;
 
-            sendInvite(name);
+        const now = Date.now();
+        if (now - lastInviteAt < INVITE_COOLDOWN_MS) return;
+
+        let invited = false;
+        for (let i = 0; i < missing.length; i++) {
+            // Invite by name even when off-screen (merchant at bank, farmers on crabs)
+            sendInvite(missing[i]);
             invited = true;
-            if (utils().log) utils().log("Party invite -> " + name);
+            if (utils().log) utils().log("Party invite -> " + missing[i]);
         }
 
         if (invited) lastInviteAt = now;
@@ -234,7 +250,7 @@
     };
 
     BOT.party = {
-        _botVersion: "party-v2",
+        _botVersion: "party-v3",
         handle: handle,
         isLeader: isLeader,
         isGrouped: isGrouped,
@@ -244,5 +260,5 @@
         logStatus: function () { logStatus(true); }
     };
 
-    if (utils().log) utils().log("CORE_Party party-v2 loaded (follower = event-only accept)");
+    if (utils().log) utils().log("CORE_Party party-v3 loaded");
 })();
