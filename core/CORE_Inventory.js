@@ -137,16 +137,21 @@
         try {
             if (typeof find_npc === "function") {
                 const npc = find_npc("basics") || find_npc("exchange") || find_npc("pots") || find_npc("fancypots");
-                if (npc && utils().distanceTo && utils().distanceTo(npc) < 400) return true;
+                if (npc && utils().distanceTo && utils().distanceTo(npc) < 350) return true;
             }
         } catch (e) { /* ignore */ }
-        try {
-            // Town plaza fallback (broader than old 200px — spawn isn't always 0,0)
-            if (character.map === "main" && Math.abs(character.x) < 100 && Math.abs(character.y) < 150) {
-                return true;
-            }
-        } catch (e) { /* ignore */ }
+        // No plaza fallback — that caused false "arrived" and sell loops
         return false;
+    }
+
+    function isMerchant() {
+        return BOT.role === "merchant" || !!(BOT.config && BOT.config.home);
+    }
+
+    let sellCooldownUntil = 0;
+
+    function setSellCooldown(ms) {
+        sellCooldownUntil = now() + (ms || 8000);
     }
 
     function nearBank() {
@@ -533,10 +538,9 @@
         return stored;
     }
 
-    function abortToFarm(reason) {
+    function abortInventory(reason) {
         if (utils().warn) utils().warn("Inventory abort: " + reason);
-        // Merchant: just clear state — don't start another doomed path
-        if (BOT.role === "merchant" || (BOT.config && BOT.config.home)) {
+        if (isMerchant()) {
             setState("idle");
             return;
         }
@@ -554,30 +558,33 @@
         const t = now();
 
         try {
-            // Global timeout — never freeze combat forever
             if (state !== "idle" && t - stateStartedAt > STATE_TIMEOUT_MS) {
-                abortToFarm("timeout in " + state);
+                if (state === "traveling_sell") setSellCooldown(15000);
+                abortInventory("timeout in " + state);
             }
 
             if (state === "idle") {
-                // Farmers with a mule: dump to Dorchant, skip town sell/bank
                 const muleResult = handleMuleDump();
                 if (muleResult === true) return true;
                 if (muleResult === false) return false;
-                // muleResult === null → no mule configured, use town cleanup
+
+                // Merchant sells junk whenever present (not only when full)
+                if (isMerchant() && cfg.autoSell !== false && hasJunkToSell() && t >= sellCooldownUntil) {
+                    setState("traveling_sell");
+                    startMove("main", "Traveling to merchant to sell junk", true);
+                    return true;
+                }
 
                 if (!needsCleanup()) return false;
 
-                // Sell only when low on space AND whitelist junk exists
-                if (cfg.autoSell !== false && inventoryFullSoon() && hasJunkToSell()) {
+                if (cfg.autoSell !== false && inventoryFullSoon() && hasJunkToSell() && t >= sellCooldownUntil) {
                     setState("traveling_sell");
                     startMove("main", "Traveling to merchant to sell junk", true);
                     return true;
                 }
 
                 if (cfg.autoBank !== false && (hasAnniversaryGift() || (inventoryFullSoon() && findBankSlot() !== -1))) {
-                    // Prefer sell pass first when junk is present (gold for Dorchant)
-                    if (cfg.autoSell !== false && hasJunkToSell()) {
+                    if (cfg.autoSell !== false && hasJunkToSell() && t >= sellCooldownUntil) {
                         setState("traveling_sell");
                         startMove("main", "Traveling to merchant to sell junk", true);
                         return true;
@@ -591,9 +598,10 @@
             }
 
             if (state === "traveling_sell") {
-                // Abort if inventory freed up / nothing left to sell
-                if (!hasJunkToSell() || !inventoryFullSoon()) {
-                    abortToFarm("sell no longer needed");
+                // Only stop when junk is gone — do NOT abort when inventory is no longer "full"
+                if (!hasJunkToSell()) {
+                    setSellCooldown(8000);
+                    abortInventory("nothing left to sell");
                     return true;
                 }
                 if (!nearMerchant()) {
@@ -601,11 +609,18 @@
                     return true;
                 }
                 setState("selling");
-                sellJunk();
+                const sold = sellJunk();
+                if (sold === 0 && hasJunkToSell()) {
+                    setSellCooldown(12000);
+                    if (utils().warn) utils().warn("Sell failed near vendor — cooling down");
+                    setState("idle");
+                    return false;
+                }
                 if (inventoryFullSoon() && cfg.autoBank !== false && findBankSlot() !== -1) {
                     setState("traveling_bank");
                     startMove("bank", "Traveling to bank", true);
-                } else if (BOT.role === "merchant" || (BOT.config && BOT.config.home && BOT.config.home.to === "bank")) {
+                } else if (isMerchant()) {
+                    setSellCooldown(5000);
                     setState("idle");
                 } else {
                     setState("returning");
@@ -616,10 +631,9 @@
 
             if (state === "traveling_bank") {
                 if (!hasAnniversaryGift() && !inventoryFullSoon() && findBankSlot() === -1) {
-                    abortToFarm("bank no longer needed");
+                    abortInventory("bank no longer needed");
                     return true;
                 }
-                // Sell junk first if we're already in town — then bank
                 if (hasJunkToSell() && nearMerchant()) {
                     sellJunk();
                 }
@@ -630,8 +644,7 @@
                 }
                 setState("banking");
                 bankItems();
-                // Merchant home is bank — don't re-path; just idle
-                if (BOT.role === "merchant" || (BOT.config && BOT.config.home && BOT.config.home.to === "bank")) {
+                if (isMerchant()) {
                     setState("idle");
                     return false;
                 }
@@ -645,11 +658,10 @@
                     setState("idle");
                     return false;
                 }
-                if (!isPathing()) startMove(returnDest(), "Returning to farm");
+                if (!isPathing()) startMove(returnDest(), "Returning to farm", isMoveStuck());
                 return true;
             }
 
-            // selling / banking are instantaneous transitions
             if (state === "selling" || state === "banking") {
                 setState("idle");
                 return false;
