@@ -117,6 +117,17 @@
         log("WARN: BOT.combat is not shared-v1 PRI_Combat — check slot 21", "#FFD080");
     }
 
+    globalThis.BOT_STATUS = {
+        main: "PRORG_Main",
+        party: (BOT.party && BOT.party._botVersion) || "MISSING",
+        combat: (BOT.combat && BOT.combat._botVersion) || "MISSING",
+        leader: (BOT.config && BOT.config.party && BOT.config.party.leader) || "?"
+    };
+    log("BOT_STATUS = " + JSON.stringify(globalThis.BOT_STATUS));
+    if (typeof set_message === "function") {
+        set_message("PRORG " + globalThis.BOT_STATUS.party);
+    }
+
     let busy = false;
     const TICK_MS = 250;
 

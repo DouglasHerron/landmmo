@@ -112,6 +112,17 @@
         log("WARN: BOT.combat is not shared-v1 WAR_Combat — check slot 20", "#FFD080");
     }
 
+    globalThis.BOT_STATUS = {
+        main: "DORG_Main",
+        party: (BOT.party && BOT.party._botVersion) || "MISSING",
+        combat: (BOT.combat && BOT.combat._botVersion) || "MISSING",
+        farm: (BOT.config && BOT.config.farm && BOT.config.farm.monster) || "?"
+    };
+    log("BOT_STATUS = " + JSON.stringify(globalThis.BOT_STATUS));
+    if (typeof set_message === "function") {
+        set_message("DORG " + globalThis.BOT_STATUS.combat);
+    }
+
     let busy = false;
     const TICK_MS = 250;
 
