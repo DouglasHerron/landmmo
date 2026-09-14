@@ -60,8 +60,10 @@
                     { for: "Dorg", name: "pants", maxLevel: 5 },
                     { for: "Dorg", name: "gloves", maxLevel: 5 },
                     { for: "Dorg", name: "shoes", maxLevel: 5 },
-                    { for: "Dorg", name: "strring", maxLevel: 3 },
-                    { for: "Dorg", name: "strearring", maxLevel: 3 },
+                    // Loot accessories (not NPC-buyable) — compound from farm dumps
+                    { for: "Dorg", name: "ringsj", maxLevel: 3 },
+                    { for: "Dorg", name: "hpbelt", maxLevel: 3 },
+                    { for: "Dorg", name: "hpamulet", maxLevel: 3 },
 
                     // Prorg — priest
                     { for: "Prorg", name: "staff", maxLevel: 6 },
@@ -70,8 +72,9 @@
                     { for: "Prorg", name: "pants", maxLevel: 5 },
                     { for: "Prorg", name: "gloves", maxLevel: 5 },
                     { for: "Prorg", name: "shoes", maxLevel: 5 },
-                    { for: "Prorg", name: "intring", maxLevel: 3 },
-                    { for: "Prorg", name: "intearring", maxLevel: 3 }
+                    { for: "Prorg", name: "ringsj", maxLevel: 3 },
+                    { for: "Prorg", name: "hpbelt", maxLevel: 3 },
+                    { for: "Prorg", name: "hpamulet", maxLevel: 3 }
                 ]
             },
 
@@ -102,10 +105,8 @@
                 autoSell: true,
                 autoBank: true,
 
-                sellItems: [
-                    "ringsj",
-                    "hpbelt"
-                ],
+                // Do not sell ringsj / hpbelt / hpamulet — party compounds these
+                sellItems: [],
 
                 protectedItems: [
                     "hpot0",

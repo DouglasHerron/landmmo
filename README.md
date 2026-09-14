@@ -208,12 +208,13 @@ Configured in `DORCHANT_Config` → `upgrade.targets`:
 |-----|--------|-----|
 | Dorg | blade | +6 |
 | Dorg | helmet, coat, pants, gloves, shoes | +5 |
-| Dorg | strring, strearring (compound) | +3 |
+| Dorg / Prorg | ringsj, hpbelt, hpamulet (loot compound) | +3 |
 | Prorg | staff | +6 |
 | Prorg | helmet, coat, pants, gloves, shoes | +5 |
-| Prorg | intring, intearring (compound) | +3 |
 
 Wishlist gear below useful max (party still needs it) is held in inventory. Items the whole party already has at cap are not bought or upgraded further.
+
+Only NPC-sold gear is auto-bought (blade, armor, staff, …). Loot accessories (`ringsj`, `hpbelt`, `hpamulet`) are compounded from farm dumps — never bought from NPCs.
 
 Scout visits `scout.meet` (default `crab`) so Dorchant can see slots — bank range cannot.
 

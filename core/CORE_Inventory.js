@@ -263,6 +263,8 @@
     /**
      * Items farmers push to Dorchant: sell-whitelist junk, gifts, and
      * non-protected loot when inventory is tight.
+     * Sell junk is dumped opportunistically when the mule is nearby —
+     * it alone does NOT summon a pickup.
      */
     function shouldDump(item) {
         if (!item) return false;
@@ -289,27 +291,30 @@
         return -1;
     }
 
-    function needsDump() {
+    function findDumpSlots() {
+        const slots = [];
+        if (!character.items) return slots;
+        for (let i = 0; i < character.items.length; i++) {
+            if (shouldDump(character.items[i])) slots.push(i);
+        }
+        return slots;
+    }
+
+    function hasDumpableItems() {
+        return findDumpSlot() !== -1;
+    }
+
+    /** Only summon Dorchant when space is tight (or gift) — not for one junk ring. */
+    function shouldRequestMule() {
         if (!muleEnabled()) return false;
         if (hasAnniversaryGift()) return true;
-        if (findDumpSlot() === -1) return false;
-        // Always dump sell-whitelist junk when present; dump other loot when tight
-        const cfg = invCfg();
-        const sellItems = cfg.sellItems || [];
-        if (character.items) {
-            for (let i = 0; i < character.items.length; i++) {
-                const it = character.items[i];
-                if (!it) continue;
-                if (sellItems.indexOf(it.name) !== -1 && (it.level || 0) === 0 && !isProtected(it) && !isLocked(it)) {
-                    return true;
-                }
-            }
-        }
-        return inventoryFullSoon();
+        if (!inventoryFullSoon()) return false;
+        return hasDumpableItems() || needsGoldSend();
     }
 
     let lastMuleRequestAt = 0;
     const MULE_REQUEST_MS = 20000;
+    const DUMP_BATCH = 6;
 
     function requestMule() {
         const name = muleName();
@@ -320,20 +325,18 @@
         try {
             if (typeof send_cm === "function") {
                 send_cm(name, "need_dump");
-                if (utils().log) utils().log("Requested dump pickup from " + name);
+                if (utils().log) utils().log("Requested dump pickup from " + name +
+                    " (free slots: " + freeSlots() + ")");
             }
         } catch (e) {
             if (utils().error) utils().error("send_cm: " + (utils().safeError ? utils().safeError(e) : e));
         }
     }
 
-    function dumpOneToMule() {
-        const mule = muleInRange();
-        if (!mule) return false;
-        const slot = findDumpSlot();
-        if (slot < 0) return false;
+    function dumpSlotToMule(mule, slot) {
+        if (!mule || slot < 0) return false;
         const item = character.items[slot];
-        if (!item) return false;
+        if (!item || !shouldDump(item)) return false;
 
         try {
             if (typeof send_item === "function") {
@@ -345,6 +348,19 @@
             if (utils().error) utils().error("send_item: " + (utils().safeError ? utils().safeError(e) : e));
         }
         return false;
+    }
+
+    /** Snapshot slots first so one tick can hand off several stacks. */
+    function dumpBatchToMule(maxN) {
+        const mule = muleInRange();
+        if (!mule) return 0;
+        const limit = typeof maxN === "number" ? maxN : DUMP_BATCH;
+        const slots = findDumpSlots().slice(0, limit);
+        let n = 0;
+        for (let i = 0; i < slots.length; i++) {
+            if (dumpSlotToMule(mule, slots[i])) n++;
+        }
+        return n;
     }
 
     function keepGold() {
@@ -386,25 +402,32 @@
 
     /**
      * Farmer mule path: dump loot + excess gold to Dorchant when nearby.
-     * @returns {boolean|null} true = busy dumping, false = nothing to do, null = fall through to town
+     * Request pickup only when inventory is tight (or gift) — not for one junk item.
+     * While mule is here, dump a batch of sell-junk / overflow loot each tick.
+     * @returns {boolean|null} true = busy dumping, false = nothing blocking, null = fall through to town
      */
     function handleMuleDump() {
         if (!muleEnabled()) return null;
         if (BOT.role === "merchant") return null;
 
-        const wantsDump = needsDump();
-        const wantsGold = needsGoldSend();
-        if (!wantsDump && !wantsGold) return false;
-
-        if (muleInRange()) {
-            // Gold first (one transfer), then items one slot per tick
-            if (wantsGold) sendGoldToMule();
-            else if (wantsDump) dumpOneToMule();
-            return true;
+        const mule = muleInRange();
+        if (mule) {
+            let busy = false;
+            // Gold and items in the same visit (gold first)
+            if (needsGoldSend()) {
+                if (sendGoldToMule()) busy = true;
+            }
+            if (hasDumpableItems()) {
+                dumpBatchToMule(DUMP_BATCH);
+                busy = true; // keep dumping across ticks while Dorchant lingers
+            }
+            return busy;
         }
 
-        // Items full → request pickup; gold can wait until next visit
-        if (wantsDump) requestMule();
+        // Not nearby — summon only when space is actually tight
+        if (shouldRequestMule()) {
+            requestMule();
+        }
         return false;
     }
 

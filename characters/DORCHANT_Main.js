@@ -129,6 +129,11 @@
         if (!root.BOT.townNav) {
             log("CORE_TownNav MISSING — sync slot 17 then reload", "#FF8080");
         }
+        if (!root.BOT.logistics || !root.BOT.logistics._botVersion) {
+            log("MER_Logistics FAILED to load — sync slot 22 then reload", "#FF8080");
+        } else {
+            log("logistics " + root.BOT.logistics._botVersion);
+        }
 
         if (root.BOT.inventory && root.BOT.inventory.reset) root.BOT.inventory.reset();
         if (root.BOT.restock && root.BOT.restock.reset) root.BOT.restock.reset();

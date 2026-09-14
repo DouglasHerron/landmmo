@@ -62,10 +62,8 @@
                 minimumFreeSlots: 8,
                 autoSell: false,
                 autoBank: false,
-                sellItems: [
-                    "ringsj",
-                    "hpbelt"
-                ],
+                // Spares go to Dorchant when inventory is tight (wishlist compounds)
+                sellItems: [],
                 protectedItems: [
                     "hpot0",
                     "hpot1",

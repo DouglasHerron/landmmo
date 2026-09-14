@@ -13,6 +13,8 @@
     let lastUpgradeAt = 0;
     let lastScoutAt = 0;
     let lastBuyAt = 0;
+    /** @type {Object.<string, number>} item name → skip-until timestamp (unbuyable / failed buy) */
+    let buySkipUntil = {};
     let scoutAnnounceAt = 0;
     let scoutTravelDone = false;
     let pickupRequestedAt = Date.now(); // force first farm trip on load
@@ -420,13 +422,9 @@
             if (seen[t.name]) continue;
             seen[t.name] = true;
 
-            if (!partyNeedsItem(t.name)) continue;
-            if (merchantHasInProgress(t.name)) continue;
-            if (merchantBestLevel(t.name) >= usefulMaxLevel(t.name)) continue;
-
-            const g = gItem(t.name);
-            if (!g || typeof g.g !== "number") continue;
-            if (!canAfford(t.name)) continue;
+            // Drop-only gear (strring, earrings, …) stays on wishlist for
+            // compound/hold, but is never routed through buy().
+            if (!shouldBuyItem(t.name)) continue;
 
             buy.push(t.name);
         }
@@ -579,6 +577,77 @@
         const g = gItem(itemName);
         if (!g || typeof g.g !== "number") return false;
         return gold() >= g.g + minGoldReserve();
+    }
+
+    /**
+     * True only if some town NPC lists this item for sale.
+     * Having G.items[name].g is NOT enough — drops like strring have a gold
+     * value for selling but cannot be bought from an NPC.
+     */
+    function npcSells(itemName) {
+        if (!itemName) return false;
+        try {
+            if (typeof G === "undefined" || !G || !G.npcs) return false;
+            for (const id in G.npcs) {
+                if (!Object.prototype.hasOwnProperty.call(G.npcs, id)) continue;
+                const npc = G.npcs[id];
+                const stock = npc && npc.items;
+                if (!stock || !stock.length) continue;
+                for (let i = 0; i < stock.length; i++) {
+                    const row = stock[i];
+                    const n = typeof row === "string" ? row : (row && row.name);
+                    if (n === itemName) return true;
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
+    function buySkipped(itemName) {
+        const until = buySkipUntil[itemName] || 0;
+        return now() < until;
+    }
+
+    function skipBuy(itemName, ms, reason) {
+        const wait = typeof ms === "number" ? ms : 600000;
+        buySkipUntil[itemName] = now() + wait;
+        if (utils().log) {
+            utils().log("Skip buy " + itemName +
+                (reason ? " — " + reason : "") +
+                " (" + Math.round(wait / 60000) + "m)");
+        }
+    }
+
+    function merchantCountBelow(itemName, maxLevel) {
+        if (!character.items) return 0;
+        let n = 0;
+        for (let i = 0; i < character.items.length; i++) {
+            const it = character.items[i];
+            if (!it || it.name !== itemName || isLocked(it)) continue;
+            if ((it.level || 0) < maxLevel) n++;
+        }
+        return n;
+    }
+
+    /** Shop gear only; compoundables need up to 3 bases before compounding. */
+    function shouldBuyItem(itemName) {
+        if (!partyNeedsItem(itemName)) return false;
+        if (buySkipped(itemName)) return false;
+        if (!npcSells(itemName)) return false;
+
+        const useful = usefulMaxLevel(itemName);
+        if (useful < 0) return false;
+        if (merchantBestLevel(itemName) >= useful) return false;
+        if (!canAfford(itemName)) return false;
+
+        const g = gItem(itemName);
+        if (g && g.compound) {
+            // Need 3 copies below cap to compound; don't stop after the first buy
+            return merchantCountBelow(itemName, useful) < 3;
+        }
+
+        if (merchantHasInProgress(itemName)) return false;
+        return true;
     }
 
     async function travelHome() {
@@ -829,16 +898,23 @@
         if (isPathing()) return true;
 
         const t = now();
-        if (t - lastBuyAt < BUY_COOLDOWN_MS) return true;
+        // Cooldown: don't block pickup / upgrade / home on a wait
+        if (t - lastBuyAt < BUY_COOLDOWN_MS) return false;
 
-        if (!canAfford(list[0])) {
+        const name = list[0];
+        if (!npcSells(name)) {
+            skipBuy(name, 24 * 60 * 60 * 1000, "not sold by any NPC");
+            return false;
+        }
+
+        if (!canAfford(name)) {
             if (utils().log) utils().log("Skip buy gear — need gold (have " + gold() + ")");
             return false;
         }
 
         // Town vendors — main map near shops
         if (character.map === "bank" || !nearNpc(["basics", "weapons", "armors", "scrolls"])) {
-            if (utils().log) utils().log("Dorchant → town (buy gear)");
+            if (utils().log) utils().log("Dorchant → town (buy gear: " + name + ")");
             if (BOT.townNav && typeof BOT.townNav.goSell === "function") {
                 BOT.townNav.goSell();
             } else {
@@ -847,16 +923,20 @@
             return true;
         }
 
-        const name = list[0];
         try {
             if (typeof buy === "function") {
                 buy(name, 1);
                 lastBuyAt = t;
                 if (utils().log) utils().log("Bought " + name + " for party gap");
+            } else {
+                skipBuy(name, 600000, "buy() missing");
+                return false;
             }
         } catch (e) {
             if (utils().error) utils().error("buy gear " + name + ": " + (utils().safeError ? utils().safeError(e) : e));
+            skipBuy(name, 600000, "buy threw");
             lastBuyAt = t;
+            return false;
         }
         return true;
     }
@@ -969,7 +1049,8 @@
         partyStatus: function () { return partyStatus; },
         usefulMaxLevel: usefulMaxLevel,
         onCm: onCm,
-        _botVersion: "MER_Logistics_v10"
+        npcSells: npcSells,
+        _botVersion: "MER_Logistics_v12"
     };
 
     if (utils().log) utils().log("MER_Logistics loaded");
